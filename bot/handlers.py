@@ -730,23 +730,42 @@ async def fsm_mileage_to(message: Message, state: FSMContext):
     await state.update_data(mileage_to=val)
     await state.set_state(FilterForm.city)
     await message.answer(
-        _step(10, 13, "Шаг 10 — Город",
-              "Например: <code>Москва</code>, <code>Волгоград</code>"),
+        _step(10, 13, "Шаг 10 — Регион", "Выбери регион или пропусти:"),
         parse_mode="HTML",
+        reply_markup=_regions_kb(),
     )
 
 
-@router.message(StateFilter(FilterForm.city))
-async def fsm_city(message: Message, state: FSMContext):
-    val = message.text.strip()
+REGIONS = [
+    "Москва", "Санкт-Петербург", "Московская обл.", "Краснодарский край",
+    "Свердловская обл.", "Ростовская обл.", "Татарстан", "Башкортостан",
+    "Новосибирская обл.", "Самарская обл.", "Нижегородская обл.", "Челябинская обл.",
+    "Волгоградская обл.", "Красноярский край", "Саратовская обл.", "Пермский край",
+    "Воронежская обл.", "Кемеровская обл.", "Ставропольский край", "Тюменская обл.",
+    "Иркутская обл.", "Омская обл.", "Ленинградская обл.", "Приморский край",
+    "Белгородская обл.", "Тверская обл.", "Ярославская обл.", "Калининградская обл.",
+]
+
+
+def _regions_kb() -> InlineKeyboardMarkup:
+    rows = []
+    for i in range(0, len(REGIONS), 2):
+        row = [
+            InlineKeyboardButton(text=r, callback_data=f"fsm_city:{r}")
+            for r in REGIONS[i:i+2]
+        ]
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="⏭ Любой регион", callback_data="fsm_city:-")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@router.callback_query(F.data.startswith("fsm_city:"))
+async def cb_fsm_city(call: CallbackQuery, state: FSMContext):
+    val = call.data.split(":", 1)[1]
     await state.update_data(city=None if val == "-" else val)
     await state.set_state(FilterForm.transmission)
-    await message.answer(
-        _step(11, 13, "Шаг 11 — КПП",
-              "<code>AUTO</code>  Автомат\n"
-              "<code>MECHANICAL</code>  Механика\n"
-              "<code>ROBOT</code>  Робот\n"
-              "<code>VARIATOR</code>  Вариатор"),
+    await call.message.edit_text(
+        _step(11, 13, "Шаг 11 — КПП", "Выбери или пропусти:"),
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [
@@ -760,6 +779,14 @@ async def fsm_city(message: Message, state: FSMContext):
             [InlineKeyboardButton(text="⏭ Пропустить", callback_data="fsm_tr:-")],
         ]),
     )
+    await call.answer()
+
+
+@router.message(StateFilter(FilterForm.city))
+async def fsm_city(message: Message, state: FSMContext):
+    val = message.text.strip()
+    await state.update_data(city=None if val == "-" else val)
+    await state.set_state(FilterForm.transmission)
 
 
 @router.callback_query(F.data.startswith("fsm_tr:"))
