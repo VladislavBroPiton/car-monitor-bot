@@ -511,31 +511,131 @@ async def cb_filter_add(call: CallbackQuery, state: FSMContext):
     await call.answer()
 
 
+# Каталог марок и моделей
+CATALOG: dict[str, list[str]] = {
+    "CHEVROLET": ["CRUZE", "CAPTIVA", "ORLANDO", "AVEO", "LACETTI", "NIVA"],
+    "SKODA":     ["OCTAVIA", "SUPERB", "RAPID", "KODIAQ", "KAROQ", "FABIA"],
+    "TOYOTA":    ["CAMRY", "COROLLA", "RAV4", "LAND CRUISER", "HIGHLANDER", "YARIS"],
+    "BMW":       ["3 SERIES", "5 SERIES", "X3", "X5", "X6", "1 SERIES"],
+    "KIA":       ["RIO", "SPORTAGE", "CERATO", "SORENTO", "OPTIMA", "CEED"],
+    "HYUNDAI":   ["SOLARIS", "TUCSON", "SANTA FE", "ELANTRA", "CRETA", "I30"],
+    "VOLKSWAGEN":["POLO", "PASSAT", "TIGUAN", "GOLF", "JETTA", "TOUAREG"],
+    "MERCEDES":  ["E-CLASS", "C-CLASS", "GLC", "GLE", "A-CLASS", "S-CLASS"],
+    "AUDI":      ["A4", "A6", "Q5", "Q7", "A3", "Q3"],
+    "NISSAN":    ["QASHQAI", "X-TRAIL", "ALMERA", "TEANA", "JUKE", "PATROL"],
+    "RENAULT":   ["DUSTER", "LOGAN", "SANDERO", "KAPTUR", "MEGANE", "ARKANA"],
+    "LADA":      ["VESTA", "GRANTA", "NIVA", "XRAY", "LARGUS", "KALINA"],
+    "MAZDA":     ["CX-5", "6", "3", "CX-9", "CX-30", "2"],
+    "MITSUBISHI":["OUTLANDER", "ASX", "PAJERO", "ECLIPSE CROSS", "L200", "GALANT"],
+    "FORD":      ["FOCUS", "MONDEO", "EXPLORER", "KUGA", "TRANSIT", "MUSTANG"],
+    "HONDA":     ["CR-V", "CIVIC", "ACCORD", "HR-V", "PILOT", "FIT"],
+    "SUBARU":    ["FORESTER", "OUTBACK", "IMPREZA", "XV", "LEGACY", "TRIBECA"],
+    "LEXUS":     ["RX", "ES", "NX", "LX", "IS", "GX"],
+    "GEELY":     ["ATLAS", "COOLRAY", "TUGELLA", "EMGRAND", "MONJARO", "OKAVANGO"],
+    "CHERY":     ["TIGGO 7 PRO", "TIGGO 4 PRO", "TIGGO 8 PRO", "ARRIZO 8", "EXEED TXL"],
+}
+
+
+def _brands_kb() -> InlineKeyboardMarkup:
+    brands = sorted(CATALOG.keys())
+    rows = []
+    # По 2 кнопки в ряд
+    for i in range(0, len(brands), 2):
+        row = [InlineKeyboardButton(text=b.title(), callback_data=f"fsm_brand:{b}") for b in brands[i:i+2]]
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="⏭ Любая марка", callback_data="fsm_brand:-")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _models_kb(brand: str) -> InlineKeyboardMarkup:
+    models = CATALOG.get(brand, [])
+    rows = []
+    for i in range(0, len(models), 2):
+        row = [InlineKeyboardButton(text=m.title(), callback_data=f"fsm_model:{m}") for m in models[i:i+2]]
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="⏭ Любая модель", callback_data="fsm_model:-")])
+    rows.append([InlineKeyboardButton(text="◀️ Сменить марку", callback_data="fsm_back_brand")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 @router.message(StateFilter(FilterForm.name))
 async def fsm_name(message: Message, state: FSMContext):
     await state.update_data(name=message.text.strip())
     await state.set_state(FilterForm.brand)
     await message.answer(
-        _step(2, 13, "Шаг 2 — Марка",
-              "Например: <code>toyota</code>, <code>bmw</code>, <code>kia</code>"),
+        _step(2, 13, "Шаг 2 — Марка", "Выбери марку или пропусти:"),
         parse_mode="HTML",
+        reply_markup=_brands_kb(),
     )
 
 
+@router.callback_query(F.data.startswith("fsm_brand:"))
+async def cb_fsm_brand(call: CallbackQuery, state: FSMContext):
+    val = call.data.split(":", 1)[1]
+    if val == "-":
+        await state.update_data(brand=None, model=None)
+        await state.set_state(FilterForm.year_from)
+        await call.message.edit_text(
+            _step(4, 13, "Шаг 4 — Год выпуска от", "Например: <code>2018</code>"),
+            parse_mode="HTML",
+        )
+    else:
+        await state.update_data(brand=val)
+        await state.set_state(FilterForm.model)
+        await call.message.edit_text(
+            _step(3, 13, f"Шаг 3 — Модель {val.title()}", "Выбери модель или пропусти:"),
+            parse_mode="HTML",
+            reply_markup=_models_kb(val),
+        )
+    await call.answer()
+
+
+@router.callback_query(F.data == "fsm_back_brand")
+async def cb_fsm_back_brand(call: CallbackQuery, state: FSMContext):
+    await state.set_state(FilterForm.brand)
+    await call.message.edit_text(
+        _step(2, 13, "Шаг 2 — Марка", "Выбери марку или пропусти:"),
+        parse_mode="HTML",
+        reply_markup=_brands_kb(),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("fsm_model:"))
+async def cb_fsm_model(call: CallbackQuery, state: FSMContext):
+    val = call.data.split(":", 1)[1]
+    await state.update_data(model=None if val == "-" else val)
+    await state.set_state(FilterForm.year_from)
+    await call.message.edit_text(
+        _step(4, 13, "Шаг 4 — Год выпуска от", "Например: <code>2018</code>"),
+        parse_mode="HTML",
+    )
+    await call.answer()
+
+
+# Fallback — текстовый ввод марки (если вдруг нужной нет в списке)
 @router.message(StateFilter(FilterForm.brand))
-async def fsm_brand(message: Message, state: FSMContext):
+async def fsm_brand_text(message: Message, state: FSMContext):
     val = message.text.strip()
-    await state.update_data(brand=None if val == "-" else val.upper())
+    brand = None if val == "-" else val.upper()
+    await state.update_data(brand=brand)
     await state.set_state(FilterForm.model)
-    await message.answer(
-        _step(3, 13, "Шаг 3 — Модель",
-              "Например: <code>camry</code>, <code>x5</code>, <code>sportage</code>"),
-        parse_mode="HTML",
-    )
+    if brand and brand in CATALOG:
+        await message.answer(
+            _step(3, 13, f"Шаг 3 — Модель {brand.title()}", "Выбери модель:"),
+            parse_mode="HTML",
+            reply_markup=_models_kb(brand),
+        )
+    else:
+        await message.answer(
+            _step(3, 13, "Шаг 3 — Модель",
+                  "Введи модель текстом или отправь «-»"),
+            parse_mode="HTML",
+        )
 
 
 @router.message(StateFilter(FilterForm.model))
-async def fsm_model(message: Message, state: FSMContext):
+async def fsm_model_text(message: Message, state: FSMContext):
     val = message.text.strip()
     await state.update_data(model=None if val == "-" else val.upper())
     await state.set_state(FilterForm.year_from)
