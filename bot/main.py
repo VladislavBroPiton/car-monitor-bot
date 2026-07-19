@@ -30,7 +30,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Создаём bot и dp на уровне модуля — они переиспользуются в lifespan
 bot = Bot(
     token=BOT_TOKEN,
     default=DefaultBotProperties(parse_mode=ParseMode.HTML),
@@ -49,22 +48,30 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Scheduler + health endpoints
     scheduler_router = create_scheduler_router(bot)
     app.include_router(scheduler_router)
 
-    # Webhook endpoint — принимаем апдейты от Telegram вручную
     @app.post(WEBHOOK_PATH)
     async def telegram_webhook(request: Request) -> Response:
-        # Проверяем секрет из заголовка X-Telegram-Bot-Api-Secret-Token
         secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
         if secret != WEBHOOK_SECRET:
             return Response(status_code=403)
-
         body = await request.json()
         update = Update.model_validate(body)
         await dp.feed_update(bot=bot, update=update)
         return Response(status_code=200)
+
+    @app.get("/set_webhook")
+    async def set_webhook_manually():
+        """Ручная установка webhook — открыть в браузере если бот не отвечает."""
+        webhook_url = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+        await bot.set_webhook(
+            url=webhook_url,
+            secret_token=WEBHOOK_SECRET,
+            drop_pending_updates=False,
+        )
+        info = await bot.get_webhook_info()
+        return {"webhook_url": webhook_url, "telegram_confirms": info.url}
 
     @app.on_event("startup")
     async def on_startup():
@@ -75,7 +82,7 @@ def create_app() -> FastAPI:
         await bot.set_webhook(
             url=webhook_url,
             secret_token=WEBHOOK_SECRET,
-            drop_pending_updates=True,
+            drop_pending_updates=False,
         )
         logger.info(f"Webhook установлен: {webhook_url}")
 
@@ -89,7 +96,8 @@ def create_app() -> FastAPI:
 
     @app.on_event("shutdown")
     async def on_shutdown():
-        await bot.delete_webhook()
+        # НЕ удаляем webhook при shutdown — иначе при рестарте Render
+        # webhook сбрасывается и бот перестаёт получать апдейты
         await close_pool()
         await bot.session.close()
         logger.info("Бот остановлен")
