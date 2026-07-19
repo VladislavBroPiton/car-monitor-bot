@@ -113,8 +113,6 @@ async def mark_seen(
 
 async def cleanup_old_listings(days: int = 30):
     pool = await get_pool()
-    import datetime
     return await pool.execute(
-        "DELETE FROM seen_listings WHERE created_at < NOW() - $1",
-        datetime.timedelta(days=days),
+        f"DELETE FROM seen_listings WHERE created_at < NOW() - INTERVAL '{days} days'"
     )
