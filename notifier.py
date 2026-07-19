@@ -3,6 +3,7 @@ import logging
 from typing import Optional
 from aiogram import Bot
 from aiogram.enums import ParseMode
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import OWNER_ID
 from parsers.base import Listing
@@ -12,80 +13,135 @@ logger = logging.getLogger(__name__)
 
 SEND_DELAY = 0.5
 
+SOURCE_BADGE = {
+    "autoru": "🔵 Auto.ru",
+    "drom":   "🟠 Дром.ру",
+}
 
-def _format_transmission(value: Optional[str]) -> str:
-    MAP = {
-        "AUTOMATIC": "Автомат",
-        "MECHANICAL": "Механика",
-        "ROBOT": "Робот",
-        "VARIATOR": "Вариатор",
-        "AUTO": "Автомат",
-    }
-    if not value:
-        return ""
-    return MAP.get(value.upper(), value)
+TRANSMISSION_RU = {
+    "AUTOMATIC": "Автомат",
+    "MECHANICAL": "Механика",
+    "ROBOT":      "Робот",
+    "VARIATOR":   "Вариатор",
+    "AUTO":       "Автомат",
+}
+
+BODY_RU = {
+    "SEDAN":    "Седан",
+    "SUV":      "Внедорожник",
+    "HATCHBACK":"Хэтчбек",
+    "WAGON":    "Универсал",
+    "COUPE":    "Купе",
+    "MINIVAN":  "Минивэн",
+    "PICKUP":   "Пикап",
+    "VAN":      "Фургон",
+}
 
 
-def _format_source(source: str) -> str:
-    return {"autoru": "Auto.ru", "drom": "Дром.ру"}.get(source, source)
-
-
-def _format_price(price: Optional[int]) -> str:
+def _fmt_price(price: Optional[int]) -> str:
     if not price:
         return "цена не указана"
-    return f"{price:,}".replace(",", " ") + " ₽"
+    return f"{price:,}".replace(",", "\u2009") + " ₽"   # тонкий пробел как разделитель
 
 
-def _format_mileage(mileage: Optional[int]) -> str:
+def _fmt_mileage(mileage: Optional[int]) -> str:
     if not mileage:
         return ""
-    return f"{mileage:,}".replace(",", " ") + " км"
+    return f"{mileage:,}".replace(",", "\u2009") + " км"
+
+
+def _fmt_transmission(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    return TRANSMISSION_RU.get(value.upper(), value)
+
+
+def _fmt_body(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    return BODY_RU.get(value.upper(), value)
 
 
 def _build_message(listing: Listing) -> str:
-    source_label = _format_source(listing.source)
-    price_str = _format_price(listing.price)
+    badge   = SOURCE_BADGE.get(listing.source, listing.source)
+    price   = _fmt_price(listing.price)
 
-    specs_parts = []
+    # ── Строка характеристик ──────────────────────────────────────────────────
+    specs: list[str] = []
     if listing.year:
-        specs_parts.append(f"{listing.year} г.")
+        specs.append(f"{listing.year} г.")
     if listing.mileage:
-        specs_parts.append(_format_mileage(listing.mileage))
-    if listing.transmission:
-        t = _format_transmission(listing.transmission)
-        if t:
-            specs_parts.append(t)
-    specs_str = " • ".join(specs_parts)
+        specs.append(_fmt_mileage(listing.mileage))
+    tr = _fmt_transmission(listing.transmission)
+    if tr:
+        specs.append(tr)
+    bt = _fmt_body(listing.body_type)
+    if bt:
+        specs.append(bt)
 
-    lines = [
-        f"🚗 <b>Новое объявление — {source_label}</b>",
-        listing.title,
-        "",
-        f"💰 {price_str}",
-    ]
+    # ── Сборка сообщения ──────────────────────────────────────────────────────
+    lines: list[str] = []
+
+    # Шапка: источник + разделитель
+    lines.append(f"{badge}")
+    lines.append("┄" * 18)
+
+    # Название
+    lines.append(f"<b>{listing.title}</b>")
+
+    # Цена — главный акцент
+    lines.append(f"\n<b>💰 {price}</b>")
+
+    # Характеристики
+    if specs:
+        lines.append("📋 " + "  ·  ".join(specs))
+
+    # Город
     if listing.city:
         lines.append(f"📍 {listing.city}")
-    if specs_str:
-        lines.append(f"📅 {specs_str}")
+
+    # Фильтр
     if listing.filter_name:
-        lines.append(f"🔍 Фильтр: «{listing.filter_name}»")
-    lines.append("")
-    lines.append(f'<a href="{listing.url}">👁 Открыть объявление →</a>')
+        lines.append(f"\n<i>🔍 Фильтр: {listing.filter_name}</i>")
 
     return "\n".join(lines)
 
 
+def _build_keyboard(listing: Listing) -> InlineKeyboardMarkup:
+    """Кнопки прямо под объявлением."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="🔗 Открыть объявление",
+                url=listing.url,
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="⭐️ В избранное",
+                callback_data=f"fav_add:{listing.source}:{listing.external_id}",
+            ),
+            InlineKeyboardButton(
+                text="🚫 Скрыть",
+                callback_data=f"listing_hide:{listing.source}:{listing.external_id}",
+            ),
+        ],
+    ])
+
+
 async def send_listing(bot: Bot, listing: Listing, chat_id: int = OWNER_ID):
     text = _build_message(listing)
+    kb   = _build_keyboard(listing)
     try:
         await bot.send_message(
             chat_id=chat_id,
             text=text,
             parse_mode=ParseMode.HTML,
-            disable_web_page_preview=False,
+            reply_markup=kb,
+            disable_web_page_preview=True,
         )
     except Exception as e:
-        logger.error(f"notifier: не удалось отправить сообщение: {e}")
+        logger.error(f"notifier: ошибка отправки: {e}")
 
 
 async def process_listings(
