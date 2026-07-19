@@ -9,37 +9,39 @@ from parsers.base import BaseParser, Listing, SearchFilter
 
 logger = logging.getLogger(__name__)
 
-# Маппинг регионов → поддомен Дром
-# Дром использует региональные поддомены: volgograd.auto.drom.ru
-REGION_SUBDOMAIN = {
-    "Москва":               "moscow",
-    "Санкт-Петербург":      "spb",
-    "Московская обл.":      "mo",
-    "Краснодарский край":   "krasnodar",
-    "Свердловская обл.":    "ekaterinburg",
-    "Ростовская обл.":      "rostov",
-    "Татарстан":            "kazan",
-    "Башкортостан":         "ufa",
-    "Новосибирская обл.":   "novosibirsk",
-    "Самарская обл.":       "samara",
-    "Нижегородская обл.":   "nn",
-    "Челябинская обл.":     "chelyabinsk",
-    "Волгоградская обл.":   "volgograd",
-    "Красноярский край":    "krasnoyarsk",
-    "Саратовская обл.":     "saratov",
-    "Пермский край":        "perm",
-    "Воронежская обл.":     "voronezh",
-    "Кемеровская обл.":     "kemerovo",
-    "Ставропольский край":  "stavropol",
-    "Тюменская обл.":       "tyumen",
-    "Иркутская обл.":       "irkutsk",
-    "Омская обл.":          "omsk",
-    "Ленинградская обл.":   "spb",
-    "Приморский край":      "vladivostok",
-    "Белгородская обл.":    "belgorod",
-    "Тверская обл.":        "tver",
-    "Ярославская обл.":     "yaroslavl",
-    "Калининградская обл.": "kaliningrad",
+# Дром работает только через основной домен www.drom.ru
+# Регион передаётся параметром region= (числовой id)
+BASE_URL = "https://www.drom.ru"
+
+REGION_ID = {
+    "Москва":               "1",
+    "Санкт-Петербург":      "2",
+    "Московская обл.":      "3",
+    "Краснодарский край":   "23",
+    "Свердловская обл.":    "65",
+    "Ростовская обл.":      "60",
+    "Татарстан":            "16",
+    "Башкортостан":         "102",
+    "Новосибирская обл.":   "54",
+    "Самарская обл.":       "63",
+    "Нижегородская обл.":   "52",
+    "Челябинская обл.":     "74",
+    "Волгоградская обл.":   "34",
+    "Красноярский край":    "24",
+    "Саратовская обл.":     "64",
+    "Пермский край":        "59",
+    "Воронежская обл.":     "36",
+    "Кемеровская обл.":     "42",
+    "Ставропольский край":  "26",
+    "Тюменская обл.":       "72",
+    "Иркутская обл.":       "38",
+    "Омская обл.":          "55",
+    "Ленинградская обл.":   "47",
+    "Приморский край":      "25",
+    "Белгородская обл.":    "31",
+    "Тверская обл.":        "69",
+    "Ярославская обл.":     "76",
+    "Калининградская обл.": "39",
 }
 
 TRANSMISSION_MAP = {
@@ -68,26 +70,21 @@ HEADERS = {
     ),
     "Accept-Language": "ru-RU,ru;q=0.9",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Referer": "https://www.drom.ru/",
 }
 
 
 def _build_url(f: SearchFilter) -> str:
-    # Определяем поддомен для региона
-    subdomain = None
-    if f.city:
-        subdomain = REGION_SUBDOMAIN.get(f.city)
-
-    if subdomain:
-        base = f"https://{subdomain}.auto.drom.ru"
-    else:
-        base = "https://auto.drom.ru"
-
-    parts = [base]
+    """
+    URL формата: https://www.drom.ru/auto/chevrolet/cruze/
+    Параметры: minyear, maxyear, minprice, maxprice, minprobeg, maxprobeg,
+               transmission, body, region (числовой id), order=date_add
+    """
+    parts = [BASE_URL, "auto"]
     if f.brand:
         parts.append(f.brand.lower())
         if f.model:
-            # Дром принимает модели с пробелами как дефисы
-            model_slug = f.model.lower().replace(" ", "-")
+            model_slug = f.model.lower().replace(" ", "_")
             parts.append(model_slug)
     url = "/".join(parts) + "/"
 
@@ -108,6 +105,10 @@ def _build_url(f: SearchFilter) -> str:
         params.append(f"transmission={TRANSMISSION_MAP[f.transmission.upper()]}")
     if f.body_type and f.body_type.upper() in BODY_TYPE_MAP:
         params.append(f"body={BODY_TYPE_MAP[f.body_type.upper()]}")
+    if f.city:
+        region_id = REGION_ID.get(f.city)
+        if region_id:
+            params.append(f"region={region_id}")
     params.append("order=date_add")
 
     if params:
@@ -139,7 +140,7 @@ def _parse_card(card, filter_name: str) -> Optional[Listing]:
     try:
         link_tag = (
             card.select_one("a[data-ftid='bulls-list_bull']")
-            or card.select_one("a[href*='auto.drom.ru']")
+            or card.select_one("a[href*='drom.ru']")
             or card.select_one("h3 a")
         )
         if not link_tag:
@@ -225,7 +226,7 @@ def _parse_html(html: str, filter_name: str) -> list[Listing]:
     if not cards:
         cards = soup.select("div.bull-list-item-v2")
     if not cards:
-        logger.warning("drom: не найдены карточки (возможно, изменилась разметка)")
+        logger.warning("drom: карточки не найдены (возможно, изменилась разметка)")
         return []
 
     listings = []
