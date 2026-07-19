@@ -9,7 +9,38 @@ from parsers.base import BaseParser, Listing, SearchFilter
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "https://auto.drom.ru"
+# Маппинг регионов → поддомен Дром
+# Дром использует региональные поддомены: volgograd.auto.drom.ru
+REGION_SUBDOMAIN = {
+    "Москва":               "moscow",
+    "Санкт-Петербург":      "spb",
+    "Московская обл.":      "mo",
+    "Краснодарский край":   "krasnodar",
+    "Свердловская обл.":    "ekaterinburg",
+    "Ростовская обл.":      "rostov",
+    "Татарстан":            "kazan",
+    "Башкортостан":         "ufa",
+    "Новосибирская обл.":   "novosibirsk",
+    "Самарская обл.":       "samara",
+    "Нижегородская обл.":   "nn",
+    "Челябинская обл.":     "chelyabinsk",
+    "Волгоградская обл.":   "volgograd",
+    "Красноярский край":    "krasnoyarsk",
+    "Саратовская обл.":     "saratov",
+    "Пермский край":        "perm",
+    "Воронежская обл.":     "voronezh",
+    "Кемеровская обл.":     "kemerovo",
+    "Ставропольский край":  "stavropol",
+    "Тюменская обл.":       "tyumen",
+    "Иркутская обл.":       "irkutsk",
+    "Омская обл.":          "omsk",
+    "Ленинградская обл.":   "spb",
+    "Приморский край":      "vladivostok",
+    "Белгородская обл.":    "belgorod",
+    "Тверская обл.":        "tver",
+    "Ярославская обл.":     "yaroslavl",
+    "Калининградская обл.": "kaliningrad",
+}
 
 TRANSMISSION_MAP = {
     "AUTO": "2",
@@ -41,11 +72,23 @@ HEADERS = {
 
 
 def _build_url(f: SearchFilter) -> str:
-    parts = [BASE_URL]
+    # Определяем поддомен для региона
+    subdomain = None
+    if f.city:
+        subdomain = REGION_SUBDOMAIN.get(f.city)
+
+    if subdomain:
+        base = f"https://{subdomain}.auto.drom.ru"
+    else:
+        base = "https://auto.drom.ru"
+
+    parts = [base]
     if f.brand:
         parts.append(f.brand.lower())
         if f.model:
-            parts.append(f.model.lower())
+            # Дром принимает модели с пробелами как дефисы
+            model_slug = f.model.lower().replace(" ", "-")
+            parts.append(model_slug)
     url = "/".join(parts) + "/"
 
     params: list[str] = []
@@ -65,8 +108,6 @@ def _build_url(f: SearchFilter) -> str:
         params.append(f"transmission={TRANSMISSION_MAP[f.transmission.upper()]}")
     if f.body_type and f.body_type.upper() in BODY_TYPE_MAP:
         params.append(f"body={BODY_TYPE_MAP[f.body_type.upper()]}")
-    if f.city:
-        params.append(f"city={f.city}")
     params.append("order=date_add")
 
     if params:
