@@ -9,10 +9,6 @@ from parsers.base import BaseParser, Listing, SearchFilter
 
 logger = logging.getLogger(__name__)
 
-# Дром работает только через основной домен www.drom.ru
-# Регион передаётся параметром region= (числовой id)
-BASE_URL = "https://www.drom.ru"
-
 REGION_ID = {
     "Москва":               "1",
     "Санкт-Петербург":      "2",
@@ -76,11 +72,22 @@ HEADERS = {
 
 def _build_url(f: SearchFilter) -> str:
     """
-    URL формата: https://www.drom.ru/auto/chevrolet/cruze/
-    Параметры: minyear, maxyear, minprice, maxprice, minprobeg, maxprobeg,
-               transmission, body, region (числовой id), order=date_add
+    Реальный формат Дром:
+    https://auto.drom.ru/region34/chevrolet/cruze/?minyear=2015&...
+    Без региона: https://auto.drom.ru/chevrolet/cruze/?...
     """
-    parts = [BASE_URL, "auto"]
+    base = "https://auto.drom.ru"
+
+    # Регион вставляется как path-сегмент regionNN
+    region_segment = ""
+    if f.city:
+        region_id = REGION_ID.get(f.city)
+        if region_id:
+            region_segment = f"region{region_id}"
+
+    parts = [base]
+    if region_segment:
+        parts.append(region_segment)
     if f.brand:
         parts.append(f.brand.lower())
         if f.model:
@@ -105,10 +112,6 @@ def _build_url(f: SearchFilter) -> str:
         params.append(f"transmission={TRANSMISSION_MAP[f.transmission.upper()]}")
     if f.body_type and f.body_type.upper() in BODY_TYPE_MAP:
         params.append(f"body={BODY_TYPE_MAP[f.body_type.upper()]}")
-    if f.city:
-        region_id = REGION_ID.get(f.city)
-        if region_id:
-            params.append(f"region={region_id}")
     params.append("order=date_add")
 
     if params:
