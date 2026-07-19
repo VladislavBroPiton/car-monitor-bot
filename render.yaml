@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: car-monitor-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn bot.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: OWNER_ID
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: WEBHOOK_HOST
+        sync: false
+      - key: WEBHOOK_SECRET
+        sync: false
+      - key: AUTORU_SESSION_ID
+        sync: false
+      - key: AUTORU_CSRF_TOKEN
+        sync: false
