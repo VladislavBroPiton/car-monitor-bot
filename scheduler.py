@@ -86,6 +86,10 @@ def create_scheduler_router(bot: Bot) -> APIRouter:
             raise HTTPException(status_code=403, detail="Forbidden")
         return await run_parsers(bot)
 
+    @router.get("/")
+    async def root():
+        return {"status": "ok"}
+
     @router.get("/health")
     async def health():
         return {"status": "ok"}
