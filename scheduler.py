@@ -87,6 +87,7 @@ def create_scheduler_router(bot: Bot) -> APIRouter:
         return await run_parsers(bot)
 
     @router.get("/")
+    @router.head("/")
     async def root():
         return {"status": "ok"}
 
