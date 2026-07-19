@@ -5,8 +5,8 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler
-from fastapi import FastAPI
+from aiogram.types import Update
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
@@ -30,16 +30,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Создаём bot и dp на уровне модуля — они переиспользуются в lifespan
+bot = Bot(
+    token=BOT_TOKEN,
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+)
+dp = Dispatcher(storage=MemoryStorage())
+dp.include_router(handlers_router)
+
 
 def create_app() -> FastAPI:
-    bot = Bot(
-        token=BOT_TOKEN,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-    )
-    dp = Dispatcher(storage=MemoryStorage())
-    dp.include_router(handlers_router)
-
     app = FastAPI(title="Car Monitor Bot")
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -47,15 +49,22 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Scheduler + health endpoints
     scheduler_router = create_scheduler_router(bot)
     app.include_router(scheduler_router)
 
-    webhook_handler = SimpleRequestHandler(
-        dispatcher=dp,
-        bot=bot,
-        secret_token=WEBHOOK_SECRET,
-    )
-    webhook_handler.register(app, path=WEBHOOK_PATH)
+    # Webhook endpoint — принимаем апдейты от Telegram вручную
+    @app.post(WEBHOOK_PATH)
+    async def telegram_webhook(request: Request) -> Response:
+        # Проверяем секрет из заголовка X-Telegram-Bot-Api-Secret-Token
+        secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if secret != WEBHOOK_SECRET:
+            return Response(status_code=403)
+
+        body = await request.json()
+        update = Update.model_validate(body)
+        await dp.feed_update(bot=bot, update=update)
+        return Response(status_code=200)
 
     @app.on_event("startup")
     async def on_startup():
@@ -68,7 +77,7 @@ def create_app() -> FastAPI:
             secret_token=WEBHOOK_SECRET,
             drop_pending_updates=True,
         )
-        logger.info(f"Webhook: {webhook_url}")
+        logger.info(f"Webhook установлен: {webhook_url}")
 
         try:
             await bot.send_message(
