@@ -97,20 +97,24 @@ def create_scheduler_router(bot: Bot) -> APIRouter:
 
     @router.get("/debug/drom")
     async def debug_drom():
-        import aiohttp
+        import asyncio, random, aiohttp
         from bs4 import BeautifulSoup
         url = "https://auto.drom.ru/region34/chevrolet/cruze/?minyear=2015&maxyear=2024&minprice=500000&maxprice=1500000&order=date_add"
+        await asyncio.sleep(random.uniform(2, 4))
         hdrs = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
-            "Accept-Language": "ru-RU,ru;q=0.9",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Referer": "https://www.drom.ru/",
+            "Upgrade-Insecure-Requests": "1",
         }
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=hdrs, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+        connector = aiohttp.TCPConnector(ssl=False)
+        async with aiohttp.ClientSession(connector=connector) as session:
+            async with session.get(url, headers=hdrs, timeout=aiohttp.ClientTimeout(total=30), allow_redirects=True) as resp:
                 status = resp.status
                 html = await resp.text() if resp.status == 200 else ""
         if not html:
-            return {"status": status, "html_length": 0}
+            return {"status": status, "html_length": 0, "note": "429=rate limit, попробуй через 5 мин"}
         soup = BeautifulSoup(html, "html.parser")
         selectors = {
             "data-ftid=bulls-list_bull": len(soup.select("[data-ftid='bulls-list_bull']")),
@@ -120,6 +124,6 @@ def create_scheduler_router(bot: Bot) -> APIRouter:
             "data-ftid_any": len(soup.select("[data-ftid]")),
         }
         ftid_vals = list({el.get("data-ftid") for el in soup.select("[data-ftid]") if el.get("data-ftid")})[:30]
-        return {"status": status, "url": url, "html_length": len(html), "selectors": selectors, "ftid_values": ftid_vals}
+        return {"status": status, "html_length": len(html), "selectors": selectors, "ftid_values": ftid_vals}
 
     return router
