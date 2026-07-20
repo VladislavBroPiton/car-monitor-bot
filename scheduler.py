@@ -95,4 +95,31 @@ def create_scheduler_router(bot: Bot) -> APIRouter:
     async def health():
         return {"status": "ok"}
 
+    @router.get("/debug/drom")
+    async def debug_drom():
+        import aiohttp
+        from bs4 import BeautifulSoup
+        url = "https://auto.drom.ru/region34/chevrolet/cruze/?minyear=2015&maxyear=2024&minprice=500000&maxprice=1500000&order=date_add"
+        hdrs = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
+            "Accept-Language": "ru-RU,ru;q=0.9",
+            "Referer": "https://www.drom.ru/",
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=hdrs, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                status = resp.status
+                html = await resp.text() if resp.status == 200 else ""
+        if not html:
+            return {"status": status, "html_length": 0}
+        soup = BeautifulSoup(html, "html.parser")
+        selectors = {
+            "data-ftid=bulls-list_bull": len(soup.select("[data-ftid='bulls-list_bull']")),
+            "div.bull-list-item-v2": len(soup.select("div.bull-list-item-v2")),
+            "div[data-bull-id]": len(soup.select("div[data-bull-id]")),
+            "article": len(soup.select("article")),
+            "data-ftid_any": len(soup.select("[data-ftid]")),
+        }
+        ftid_vals = list({el.get("data-ftid") for el in soup.select("[data-ftid]") if el.get("data-ftid")})[:30]
+        return {"status": status, "url": url, "html_length": len(html), "selectors": selectors, "ftid_values": ftid_vals}
+
     return router
