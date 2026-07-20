@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import random
 import re
 from typing import Optional
 import aiohttp
@@ -58,16 +59,27 @@ BODY_TYPE_MAP = {
     "VAN": "8",
 }
 
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "ru-RU,ru;q=0.9",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Referer": "https://www.drom.ru/",
-}
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+]
+
+def _get_headers() -> dict:
+    return {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Referer": "https://www.drom.ru/",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Upgrade-Insecure-Requests": "1",
+    }
 
 
 def _build_url(f: SearchFilter) -> str:
@@ -202,24 +214,36 @@ def _parse_card(card, filter_name: str) -> Optional[Listing]:
         return None
 
 
-async def _fetch_page(session: aiohttp.ClientSession, url: str) -> Optional[str]:
-    try:
-        async with session.get(
-            url,
-            headers=HEADERS,
-            timeout=aiohttp.ClientTimeout(total=25),
-            allow_redirects=True,
-        ) as resp:
-            if resp.status != 200:
-                logger.warning(f"drom: статус {resp.status} для {url}")
-                return None
-            return await resp.text()
-    except asyncio.TimeoutError:
-        logger.error(f"drom: timeout для {url}")
-        return None
-    except Exception as e:
-        logger.error(f"drom: ошибка запроса {url}: {e}")
-        return None
+async def _fetch_page(url: str) -> Optional[str]:
+    """Запрос с повторной попыткой при 429."""
+    for attempt in range(3):
+        try:
+            # Случайная задержка чтобы не выглядеть как бот
+            await asyncio.sleep(random.uniform(2.0, 5.0))
+
+            connector = aiohttp.TCPConnector(ssl=False)
+            async with aiohttp.ClientSession(connector=connector) as session:
+                async with session.get(
+                    url,
+                    headers=_get_headers(),
+                    timeout=aiohttp.ClientTimeout(total=30),
+                    allow_redirects=True,
+                ) as resp:
+                    if resp.status == 429:
+                        wait = 30 * (attempt + 1)
+                        logger.warning(f"drom: 429 rate limit, ждём {wait}с (попытка {attempt+1})")
+                        await asyncio.sleep(wait)
+                        continue
+                    if resp.status != 200:
+                        logger.warning(f"drom: статус {resp.status} для {url}")
+                        return None
+                    return await resp.text()
+        except asyncio.TimeoutError:
+            logger.error(f"drom: timeout для {url} (попытка {attempt+1})")
+        except Exception as e:
+            logger.error(f"drom: ошибка запроса {url}: {e}")
+            return None
+    return None
 
 
 def _parse_html(html: str, filter_name: str) -> list[Listing]:
@@ -250,8 +274,7 @@ class DromParser(BaseParser):
         url = _build_url(f)
         logger.info(f"drom: запрос для фильтра «{f.name}»: {url}")
 
-        async with aiohttp.ClientSession() as session:
-            html = await _fetch_page(session, url)
+        html = await _fetch_page(url)
 
         if not html:
             return []
