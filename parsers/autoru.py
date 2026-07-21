@@ -212,7 +212,8 @@ def _parse_listing(item: dict, filter_name: str) -> Optional[Listing]:
 
         transmission_raw = tech.get("transmission", "")
         body_raw = vehicle.get("body_type", "")
-        url = f"https://auto.ru/cars/used/sale/{offer_id}/"
+        # Берём готовый URL из ответа API, не генерируем сами
+        url = item.get("url") or f"https://auto.ru/cars/used/sale/{offer_id}/"
 
         return Listing(
             source="autoru",
