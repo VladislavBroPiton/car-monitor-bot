@@ -95,6 +95,12 @@ def create_scheduler_router(bot: Bot) -> APIRouter:
     async def health():
         return {"status": "ok"}
 
+    @router.get("/run_now")
+    async def run_now():
+        """Запустить парсер вручную через браузер (без авторизации — только для тестов)."""
+        result = await run_parsers(bot)
+        return result
+
     @router.get("/debug/drom")
     async def debug_drom():
         import asyncio, random, aiohttp
