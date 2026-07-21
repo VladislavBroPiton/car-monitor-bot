@@ -121,16 +121,37 @@ CATALOG: dict[str, list[str]] = {
     "CHERY":     ["TIGGO 7 PRO", "TIGGO 4 PRO", "TIGGO 8 PRO", "ARRIZO 8", "EXEED TXL"],
 }
 
-REGIONS = [
-    "Москва", "Санкт-Петербург", "Московская обл.", "Краснодарский край",
-    "Свердловская обл.", "Ростовская обл.", "Татарстан", "Башкортостан",
-    "Новосибирская обл.", "Самарская обл.", "Нижегородская обл.", "Челябинская обл.",
-    "Волгоградская обл.", "Красноярский край", "Саратовская обл.", "Пермский край",
-    "Воронежская обл.", "Кемеровская обл.", "Ставропольский край", "Тюменская обл.",
-    "Иркутская обл.", "Омская обл.", "Ленинградская обл.", "Приморский край",
-    "Белгородская обл.", "Тверская обл.", "Ярославская обл.", "Калининградская обл.",
-    "Волгоград", "Волжский", "Камышин", "Михайловка",
-]
+# Двухуровневый справочник: регион → список городов
+REGION_CITIES: dict[str, list[str]] = {
+    "Москва":               ["Москва", "Зеленоград", "Троицк", "Щербинка"],
+    "Санкт-Петербург":      ["Санкт-Петербург", "Колпино", "Пушкин", "Петергоф"],
+    "Московская обл.":      ["Балашиха", "Подольск", "Химки", "Королёв", "Мытищи", "Люберцы", "Красногорск", "Одинцово", "Электросталь", "Коломна", "Серпухов", "Домодедово", "Щёлково", "Ногинск", "Раменское"],
+    "Краснодарский край":   ["Краснодар", "Сочи", "Новороссийск", "Армавир", "Майкоп", "Ейск", "Анапа", "Геленджик", "Тимашёвск", "Кропоткин"],
+    "Свердловская обл.":    ["Екатеринбург", "Нижний Тагил", "Каменск-Уральский", "Первоуральск", "Серов", "Новоуральск", "Асбест", "Берёзовский"],
+    "Ростовская обл.":      ["Ростов-на-Дону", "Таганрог", "Шахты", "Новочеркасск", "Волгодонск", "Батайск", "Новошахтинск", "Каменск-Шахтинский"],
+    "Татарстан":            ["Казань", "Набережные Челны", "Нижнекамск", "Альметьевск", "Зеленодольск", "Бугульма", "Елабуга", "Лениногорск"],
+    "Башкортостан":         ["Уфа", "Стерлитамак", "Салават", "Нефтекамск", "Октябрьский", "Белебей", "Туймазы", "Ишимбай"],
+    "Новосибирская обл.":   ["Новосибирск", "Бердск", "Искитим", "Куйбышев", "Барабинск", "Татарск"],
+    "Самарская обл.":       ["Самара", "Тольятти", "Сызрань", "Новокуйбышевск", "Чапаевск", "Жигулёвск", "Кинель", "Отрадный"],
+    "Нижегородская обл.":   ["Нижний Новгород", "Дзержинск", "Арзамас", "Саров", "Бор", "Кстово", "Павлово", "Выкса"],
+    "Челябинская обл.":     ["Челябинск", "Магнитогорск", "Миасс", "Озёрск", "Троицк", "Копейск", "Златоуст", "Сатка", "Кыштым"],
+    "Волгоградская обл.":   ["Волгоград", "Волжский", "Камышин", "Михайловка", "Урюпинск", "Фролово", "Калач-на-Дону", "Николаевск"],
+    "Красноярский край":    ["Красноярск", "Норильск", "Ачинск", "Железногорск", "Канск", "Минусинск", "Зеленогорск"],
+    "Саратовская обл.":     ["Саратов", "Энгельс", "Балаково", "Балашов", "Вольск", "Ртищево"],
+    "Пермский край":        ["Пермь", "Березники", "Соликамск", "Чайковский", "Лысьва", "Кунгур", "Краснокамск"],
+    "Воронежская обл.":     ["Воронеж", "Борисоглебск", "Россошь", "Лиски", "Семилуки", "Нововоронеж"],
+    "Кемеровская обл.":     ["Кемерово", "Новокузнецк", "Прокопьевск", "Белово", "Ленинск-Кузнецкий", "Киселёвск", "Юрга", "Анжеро-Судженск"],
+    "Ставропольский край":  ["Ставрополь", "Пятигорск", "Кисловодск", "Невинномысск", "Ессентуки", "Михайловск", "Будённовск"],
+    "Тюменская обл.":       ["Тюмень", "Тобольск", "Ишим", "Ялуторовск"],
+    "Иркутская обл.":       ["Иркутск", "Братск", "Ангарск", "Усть-Илимск", "Шелехов", "Усолье-Сибирское"],
+    "Омская обл.":          ["Омск", "Тара", "Калачинск", "Исилькуль"],
+    "Ленинградская обл.":   ["Гатчина", "Выборг", "Тихвин", "Сосновый Бор", "Кириши", "Волхов", "Всеволожск"],
+    "Приморский край":      ["Владивосток", "Находка", "Уссурийск", "Артём", "Арсеньев", "Партизанск"],
+    "Белгородская обл.":    ["Белгород", "Старый Оскол", "Губкин", "Шебекино", "Алексеевка"],
+    "Тверская обл.":        ["Тверь", "Ржев", "Вышний Волочёк", "Кимры", "Конаково"],
+    "Ярославская обл.":     ["Ярославль", "Рыбинск", "Переславль-Залесский", "Тутаев", "Углич"],
+    "Калининградская обл.": ["Калининград", "Черняховск", "Советск", "Балтийск", "Гусев"],
+}
 
 # ── Клавиатуры ────────────────────────────────────────────────────────────────
 
@@ -239,25 +260,53 @@ def _confirm_delete_kb(filter_id: int) -> InlineKeyboardMarkup:
     ])
 
 
-def _cities_kb(selected: list[str]) -> InlineKeyboardMarkup:
-    """Клавиатура множественного выбора городов."""
+def _regions_list_kb(selected: list[str]) -> InlineKeyboardMarkup:
+    """Список регионов — первый уровень выбора."""
     rows = []
-    for i in range(0, len(REGIONS), 2):
+    regions = list(REGION_CITIES.keys())
+    for i in range(0, len(regions), 2):
         row = []
-        for r in REGIONS[i:i+2]:
-            check = "✅ " if r in selected else ""
+        for r in regions[i:i+2]:
+            # Показываем сколько городов из этого региона уже выбрано
+            count = sum(1 for c in REGION_CITIES[r] if c in selected)
+            label = f"✅ {r} ({count})" if count else r
             row.append(InlineKeyboardButton(
-                text=f"{check}{r}",
-                callback_data=f"fsm_city_toggle:{r}",
+                text=label,
+                callback_data=f"fsm_region_open:{r}",
             ))
         rows.append(row)
+    total = len(selected)
     rows.append([
         InlineKeyboardButton(
-            text=f"✔️ Готово ({len(selected)} выбрано)" if selected else "⏭ Пропустить (все города)",
+            text=f"✔️ Готово ({total} город{'ов' if total != 1 else ''})" if total else "⏭ Пропустить (все города)",
             callback_data="fsm_city_done",
         )
     ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _cities_in_region_kb(region: str, selected: list[str]) -> InlineKeyboardMarkup:
+    """Города конкретного региона — второй уровень."""
+    cities = REGION_CITIES.get(region, [])
+    rows = []
+    for i in range(0, len(cities), 2):
+        row = []
+        for c in cities[i:i+2]:
+            check = "✅ " if c in selected else ""
+            row.append(InlineKeyboardButton(
+                text=f"{check}{c}",
+                callback_data=f"fsm_city_toggle:{c}",
+            ))
+        rows.append(row)
+    rows.append([
+        InlineKeyboardButton(text="◀️ Назад к регионам", callback_data="fsm_regions_back")
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _cities_kb(selected: list[str]) -> InlineKeyboardMarkup:
+    """Алиас для обратной совместимости — открывает список регионов."""
+    return _regions_list_kb(selected)
 
 
 def _brands_kb() -> InlineKeyboardMarkup:
@@ -632,7 +681,7 @@ async def cb_edit_field(call: CallbackQuery, state: FSMContext):
         await state.update_data(edit_cities=current)
         await call.message.edit_text(
             f"📍 Выбери города (можно несколько).\nВыбрано: {', '.join(current) if current else 'все'}",
-            reply_markup=_cities_kb(current),
+            reply_markup=_regions_list_kb(current),
         )
     elif field == "brand":
         await call.message.edit_text("🚗 Выбери марку:", reply_markup=_brands_kb())
@@ -764,18 +813,47 @@ async def cb_edit_model(call: CallbackQuery, state: FSMContext):
 
 # ── Города при редактировании ─────────────────────────────────────────────────
 
+@router.callback_query(F.data.startswith("fsm_region_open:"), StateFilter(EditForm.entering_value))
+async def cb_edit_region_open(call: CallbackQuery, state: FSMContext):
+    region = call.data.split(":", 1)[1]
+    data = await state.get_data()
+    selected = list(data.get("edit_cities", []))
+    await state.update_data(edit_current_region=region)
+    await call.message.edit_text(
+        f"📍 <b>{region}</b>
+Выбери города:",
+        parse_mode="HTML",
+        reply_markup=_cities_in_region_kb(region, selected),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data == "fsm_regions_back", StateFilter(EditForm.entering_value))
+async def cb_edit_regions_back(call: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    selected = list(data.get("edit_cities", []))
+    filter_id = data.get("edit_filter_id")
+    await call.message.edit_text(
+        f"📍 Выбери города (можно несколько).
+Выбрано: {', '.join(selected) if selected else 'все'}",
+        reply_markup=_regions_list_kb(selected),
+    )
+    await call.answer()
+
+
 @router.callback_query(F.data.startswith("fsm_city_toggle:"), StateFilter(EditForm.entering_value))
 async def cb_edit_city_toggle(call: CallbackQuery, state: FSMContext):
     city = call.data.split(":", 1)[1]
     data = await state.get_data()
     selected = list(data.get("edit_cities", []))
+    region = data.get("edit_current_region", "")
     if city in selected:
         selected.remove(city)
     else:
         selected.append(city)
     await state.update_data(edit_cities=selected)
-    await call.message.edit_reply_markup(reply_markup=_cities_kb(selected))
-    await call.answer(f"{'✅ ' + city if city in selected else '❌ ' + city}")
+    await call.message.edit_reply_markup(reply_markup=_cities_in_region_kb(region, selected))
+    await call.answer()
 
 
 @router.callback_query(F.data == "fsm_city_done", StateFilter(EditForm.entering_value))
@@ -974,10 +1052,39 @@ async def fsm_mileage_to(message: Message, state: FSMContext):
     selected = data.get("fsm_cities", [])
     await message.answer(
         _step(10, 13, "Шаг 10 — Города",
-              "Выбери один или несколько городов.\nМожно пропустить — будут все города."),
+              "Выбери регион, затем города внутри него.\nМожно выбрать города из нескольких регионов."),
         parse_mode="HTML",
-        reply_markup=_cities_kb(selected),
+        reply_markup=_regions_list_kb(selected),
     )
+
+
+@router.callback_query(F.data.startswith("fsm_region_open:"), StateFilter(FilterForm.cities))
+async def cb_fsm_region_open(call: CallbackQuery, state: FSMContext):
+    region = call.data.split(":", 1)[1]
+    data = await state.get_data()
+    selected = list(data.get("fsm_cities", []))
+    await state.update_data(fsm_current_region=region)
+    await call.message.edit_text(
+        f"📍 <b>{region}</b>
+Выбери города:",
+        parse_mode="HTML",
+        reply_markup=_cities_in_region_kb(region, selected),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data == "fsm_regions_back", StateFilter(FilterForm.cities))
+async def cb_fsm_regions_back(call: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    selected = list(data.get("fsm_cities", []))
+    await call.message.edit_text(
+        _step(10, 13, "Шаг 10 — Города",
+              "Выбери регион, затем города внутри него.
+Можно выбрать города из нескольких регионов."),
+        parse_mode="HTML",
+        reply_markup=_regions_list_kb(selected),
+    )
+    await call.answer()
 
 
 @router.callback_query(F.data.startswith("fsm_city_toggle:"), StateFilter(FilterForm.cities))
@@ -985,12 +1092,13 @@ async def cb_fsm_city_toggle(call: CallbackQuery, state: FSMContext):
     city = call.data.split(":", 1)[1]
     data = await state.get_data()
     selected = list(data.get("fsm_cities", []))
+    region = data.get("fsm_current_region", "")
     if city in selected:
         selected.remove(city)
     else:
         selected.append(city)
     await state.update_data(fsm_cities=selected)
-    await call.message.edit_reply_markup(reply_markup=_cities_kb(selected))
+    await call.message.edit_reply_markup(reply_markup=_cities_in_region_kb(region, selected))
     await call.answer()
 
 
