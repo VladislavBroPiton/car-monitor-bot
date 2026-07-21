@@ -221,13 +221,13 @@ async def _fetch_page(url: str) -> Optional[str]:
             # Случайная задержка чтобы не выглядеть как бот
             await asyncio.sleep(random.uniform(2.0, 5.0))
 
-            connector = aiohttp.TCPConnector(ssl=False)
-            async with aiohttp.ClientSession(connector=connector) as session:
+            async with aiohttp.ClientSession() as session:
                 async with session.get(
                     url,
                     headers=_get_headers(),
                     timeout=aiohttp.ClientTimeout(total=30),
                     allow_redirects=True,
+                    ssl=True,
                 ) as resp:
                     if resp.status == 429:
                         wait = 30 * (attempt + 1)
