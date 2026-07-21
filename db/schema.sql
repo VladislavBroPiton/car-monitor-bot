@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS filters (
     mileage_from INTEGER,
     mileage_to   INTEGER,
     city         TEXT,
+    cities       TEXT[],
     transmission TEXT,
     body_type    TEXT,
     sources      TEXT[] DEFAULT ARRAY['autoru', 'drom'],
