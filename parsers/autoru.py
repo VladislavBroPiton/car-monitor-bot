@@ -169,6 +169,10 @@ class AutoRuParser(BaseParser):
             # Фильтрация по городу если заданы cities
             if f.cities and listings:
                 cities_lower = [c.lower() for c in f.cities]
+                # Логируем уникальные города из результатов для отладки
+                found_cities = list({l.city for l in listings if l.city})
+                logger.info(f"autoru: города в результатах: {found_cities[:10]}")
+                logger.info(f"autoru: ищем города: {f.cities}")
                 filtered = [
                     l for l in listings
                     if l.city and any(c in l.city.lower() for c in cities_lower)
