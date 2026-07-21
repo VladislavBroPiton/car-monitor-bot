@@ -172,8 +172,13 @@ def _build_payload(f: SearchFilter, page: int = 1) -> dict:
     if f.cities:
         geo_ids = [CITY_GEO_ID[c] for c in f.cities if c in CITY_GEO_ID]
         if geo_ids:
+            # Auto.ru принимает geo_id как список в поле geo_id
             payload["geo_id"] = geo_ids
-            logger.info(f"autoru: geo_id для городов {f.cities}: {geo_ids}")
+            # Радиус поиска 0 = только выбранный город (без окрестностей)
+            payload["geo_radius"] = 0
+            logger.info(f"autoru: geo_id={geo_ids} для городов {f.cities}")
+        else:
+            logger.warning(f"autoru: не найден geo_id для городов {f.cities}")
 
     return payload
 
@@ -239,6 +244,7 @@ class AutoRuParser(BaseParser):
         payload = _build_payload(f, page=1)
 
         try:
+            logger.info(f"autoru: payload geo_id={payload.get('geo_id')}, geo_radius={payload.get('geo_radius')}")
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     SEARCH_URL,
