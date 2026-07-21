@@ -166,7 +166,20 @@ class AutoRuParser(BaseParser):
                 if listing:
                     listings.append(listing)
 
-            logger.info(f"autoru: фильтр «{f.name}» → {len(listings)} объявлений")
+            # Фильтрация по городу если заданы cities
+            if f.cities and listings:
+                cities_lower = [c.lower() for c in f.cities]
+                filtered = [
+                    l for l in listings
+                    if l.city and any(c in l.city.lower() for c in cities_lower)
+                ]
+                logger.info(
+                    f"autoru: фильтр «{f.name}» → {len(listings)} объявлений, "
+                    f"после фильтра по городу: {len(filtered)}"
+                )
+                listings = filtered
+            else:
+                logger.info(f"autoru: фильтр «{f.name}» → {len(listings)} объявлений")
 
         except asyncio.TimeoutError:
             logger.error(f"autoru: timeout для фильтра «{f.name}»")
