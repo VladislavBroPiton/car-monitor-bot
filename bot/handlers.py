@@ -406,7 +406,10 @@ async def cmd_menu(message: Message):
 
 @router.callback_query(F.data == "main_menu")
 async def cb_main_menu(call: CallbackQuery):
-    await call.message.edit_text("🏠 <b>Главное меню</b>", parse_mode="HTML", reply_markup=_main_menu_kb())
+    try:
+        await call.message.edit_text("🏠 <b>Главное меню</b>", parse_mode="HTML", reply_markup=_main_menu_kb())
+    except Exception:
+        pass
     await call.answer()
 
 
@@ -464,10 +467,13 @@ async def cmd_status(message: Message):
 @router.callback_query(F.data == "show_status")
 async def cb_show_status(call: CallbackQuery):
     text = await _status_text()
-    await call.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="🔄 Обновить", callback_data="show_status"),
-        InlineKeyboardButton(text="🏠 Меню",     callback_data="main_menu"),
-    ]]))
+    try:
+        await call.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="🔄 Обновить", callback_data="show_status"),
+            InlineKeyboardButton(text="🏠 Меню",     callback_data="main_menu"),
+        ]]))
+    except Exception:
+        pass
     await call.answer("Обновлено ✓")
 
 
