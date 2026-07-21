@@ -31,7 +31,8 @@ class SearchFilter:
     price_to: Optional[int] = None
     mileage_from: Optional[int] = None
     mileage_to: Optional[int] = None
-    city: Optional[str] = None
+    city: Optional[str] = None   # устарело
+    cities: list[str] = field(default_factory=list)  # список городов
     transmission: Optional[str] = None
     body_type: Optional[str] = None
     sources: list[str] = field(default_factory=lambda: ["autoru", "drom"])
@@ -51,6 +52,7 @@ class SearchFilter:
             mileage_from=record["mileage_from"],
             mileage_to=record["mileage_to"],
             city=record["city"],
+            cities=list(record["cities"] or []),
             transmission=record["transmission"],
             body_type=record["body_type"],
             sources=list(record["sources"] or ["autoru", "drom"]),
