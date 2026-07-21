@@ -259,7 +259,16 @@ class AutoRuParser(BaseParser):
                         return []
                     data = await resp.json(content_type=None)
 
-            for item in data.get("offers", []):
+            offers = data.get("offers", [])
+            # Логируем первый offer для отладки структуры URL
+            if offers:
+                first = offers[0]
+                logger.info(f"autoru debug: id={first.get('id')}, saleId={first.get('saleId')}, url={first.get('url')}")
+                logger.info(f"autoru debug: category={first.get('category')}, section={first.get('section')}")
+                vi = first.get("vehicle_info", {})
+                logger.info(f"autoru debug: mark={vi.get('mark_info',{}).get('code')}, model={vi.get('model_info',{}).get('code')}")
+
+            for item in offers:
                 listing = _parse_listing(item, f.name)
                 if listing:
                     listings.append(listing)
