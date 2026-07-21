@@ -29,6 +29,14 @@ async def get_active_filters(user_id: int) -> list[asyncpg.Record]:
     )
 
 
+async def get_filter_by_id(filter_id: int, user_id: int) -> Optional[asyncpg.Record]:
+    pool = await get_pool()
+    return await pool.fetchrow(
+        "SELECT * FROM filters WHERE id = $1 AND user_id = $2",
+        filter_id, user_id,
+    )
+
+
 async def get_all_active_filters() -> list[asyncpg.Record]:
     pool = await get_pool()
     return await pool.fetch("SELECT * FROM filters WHERE is_active = TRUE")
@@ -45,7 +53,7 @@ async def create_filter(
     price_to: Optional[int] = None,
     mileage_from: Optional[int] = None,
     mileage_to: Optional[int] = None,
-    city: Optional[str] = None,
+    cities: Optional[list[str]] = None,
     transmission: Optional[str] = None,
     body_type: Optional[str] = None,
     sources: list[str] = None,
@@ -58,14 +66,36 @@ async def create_filter(
         INSERT INTO filters
             (user_id, name, brand, model, year_from, year_to,
              price_from, price_to, mileage_from, mileage_to,
-             city, transmission, body_type, sources)
+             cities, transmission, body_type, sources)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
         RETURNING *
         """,
         user_id, name, brand, model, year_from, year_to,
         price_from, price_to, mileage_from, mileage_to,
-        city, transmission, body_type, sources,
+        cities, transmission, body_type, sources,
     )
+
+
+async def update_filter_field(
+    filter_id: int,
+    user_id: int,
+    field: str,
+    value,
+) -> bool:
+    """Обновить одно поле фильтра."""
+    allowed = {
+        "name", "brand", "model", "year_from", "year_to",
+        "price_from", "price_to", "mileage_from", "mileage_to",
+        "cities", "transmission", "body_type", "sources",
+    }
+    if field not in allowed:
+        return False
+    pool = await get_pool()
+    result = await pool.execute(
+        f"UPDATE filters SET {field} = $1 WHERE id = $2 AND user_id = $3",
+        value, filter_id, user_id,
+    )
+    return result == "UPDATE 1"
 
 
 async def delete_filter(filter_id: int, user_id: int) -> bool:
