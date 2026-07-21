@@ -46,7 +46,8 @@ def _build_headers() -> dict:
     if AUTORU_CSRF_TOKEN:
         headers["x-csrf-token"] = AUTORU_CSRF_TOKEN
     if AUTORU_SESSION_ID:
-        headers["cookie"] = f"autoru_sid={AUTORU_SESSION_ID};"
+        # Передаём полные cookies для обхода капчи
+        headers["cookie"] = AUTORU_SESSION_ID
     return headers
 
 
