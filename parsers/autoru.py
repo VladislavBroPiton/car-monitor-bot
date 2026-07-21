@@ -6,6 +6,91 @@ import aiohttp
 from config import AUTORU_SESSION_ID, AUTORU_CSRF_TOKEN
 from parsers.base import BaseParser, Listing, SearchFilter
 
+# Маппинг городов → geo_id Auto.ru
+# Источник: внутренний API auto.ru/geo/suggest/
+CITY_GEO_ID: dict[str, int] = {
+    "Москва":               213,
+    "Санкт-Петербург":      2,
+    "Екатеринбург":         54,
+    "Новосибирск":          65,
+    "Казань":               43,
+    "Нижний Новгород":      47,
+    "Челябинск":            56,
+    "Самара":               51,
+    "Уфа":                  172,
+    "Ростов-на-Дону":       39,
+    "Краснодар":            35,
+    "Пермь":                50,
+    "Воронеж":              193,
+    "Волгоград":            38,
+    "Волжский":             10950,
+    "Камышин":              11115,
+    "Михайловка":           11120,
+    "Урюпинск":             11116,
+    "Фролово":              11118,
+    "Калач-на-Дону":        11113,
+    "Николаевск":           11119,
+    "Саратов":              194,
+    "Тольятти":             38,
+    "Красноярск":           62,
+    "Иркутск":              63,
+    "Омск":                 66,
+    "Тюмень":               55,
+    "Кемерово":             81,
+    "Томск":                67,
+    "Барнаул":              197,
+    "Владивосток":          75,
+    "Ижевск":               44,
+    "Хабаровск":            76,
+    "Ярославль":            16,
+    "Оренбург":             48,
+    "Рязань":               10,
+    "Пенза":                49,
+    "Тверь":                14,
+    "Липецк":               9,
+    "Белгород":             4,
+    "Тула":                 15,
+    "Калининград":          22,
+    "Балашиха":             10740,
+    "Подольск":             10747,
+    "Химки":                10758,
+    "Мытищи":               10741,
+    "Люберцы":              10744,
+    "Королёв":              10748,
+    "Красногорск":          10742,
+    "Одинцово":             10746,
+    "Гатчина":              10838,
+    "Выборг":               10842,
+    "Таганрог":             11010,
+    "Шахты":                11012,
+    "Новочеркасск":         11011,
+    "Батайск":              11013,
+    "Набережные Челны":     10293,
+    "Нижнекамск":           10294,
+    "Альметьевск":          10296,
+    "Стерлитамак":          10904,
+    "Салават":              10906,
+    "Тобольск":             10926,
+    "Магнитогорск":         10754,
+    "Миасс":                10755,
+    "Сочи":                 239,
+    "Новороссийск":         971,
+    "Армавир":              976,
+    "Анапа":                11252,
+    "Дзержинск":            10786,
+    "Арзамас":              10789,
+    "Первоуральск":         10943,
+    "Нижний Тагил":         236,
+    "Ачинск":               10185,
+    "Братск":               10191,
+    "Ангарск":              10192,
+    "Прокопьевск":          10100,
+    "Новокузнецк":          237,
+    "Ставрополь":           36,
+    "Пятигорск":            11204,
+    "Кисловодск":           11205,
+}
+
 logger = logging.getLogger(__name__)
 
 SEARCH_URL = "https://auto.ru/-/ajax/desktop/listing/"
@@ -82,6 +167,13 @@ def _build_payload(f: SearchFilter, page: int = 1) -> dict:
         payload["transmission"] = [TRANSMISSION_MAP[f.transmission.upper()]]
     if f.body_type and f.body_type.upper() in BODY_TYPE_MAP:
         payload["body_type_group"] = [BODY_TYPE_MAP[f.body_type.upper()]]
+
+    # Фильтрация по городам через geo_id
+    if f.cities:
+        geo_ids = [CITY_GEO_ID[c] for c in f.cities if c in CITY_GEO_ID]
+        if geo_ids:
+            payload["geo_id"] = geo_ids
+            logger.info(f"autoru: geo_id для городов {f.cities}: {geo_ids}")
 
     return payload
 
@@ -166,24 +258,7 @@ class AutoRuParser(BaseParser):
                 if listing:
                     listings.append(listing)
 
-            # Фильтрация по городу если заданы cities
-            if f.cities and listings:
-                cities_lower = [c.lower() for c in f.cities]
-                # Логируем уникальные города из результатов для отладки
-                found_cities = list({l.city for l in listings if l.city})
-                logger.info(f"autoru: города в результатах: {found_cities[:10]}")
-                logger.info(f"autoru: ищем города: {f.cities}")
-                filtered = [
-                    l for l in listings
-                    if l.city and any(c in l.city.lower() for c in cities_lower)
-                ]
-                logger.info(
-                    f"autoru: фильтр «{f.name}» → {len(listings)} объявлений, "
-                    f"после фильтра по городу: {len(filtered)}"
-                )
-                listings = filtered
-            else:
-                logger.info(f"autoru: фильтр «{f.name}» → {len(listings)} объявлений")
+            logger.info(f"autoru: фильтр «{f.name}» → {len(listings)} объявлений")
 
         except asyncio.TimeoutError:
             logger.error(f"autoru: timeout для фильтра «{f.name}»")
