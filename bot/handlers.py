@@ -820,8 +820,7 @@ async def cb_edit_region_open(call: CallbackQuery, state: FSMContext):
     selected = list(data.get("edit_cities", []))
     await state.update_data(edit_current_region=region)
     await call.message.edit_text(
-        f"📍 <b>{region}</b>
-Выбери города:",
+        f"📍 <b>{region}</b>\nВыбери города:",
         parse_mode="HTML",
         reply_markup=_cities_in_region_kb(region, selected),
     )
@@ -834,8 +833,7 @@ async def cb_edit_regions_back(call: CallbackQuery, state: FSMContext):
     selected = list(data.get("edit_cities", []))
     filter_id = data.get("edit_filter_id")
     await call.message.edit_text(
-        f"📍 Выбери города (можно несколько).
-Выбрано: {', '.join(selected) if selected else 'все'}",
+        f"📍 Выбери города (можно несколько).\nВыбрано: {', '.join(selected) if selected else 'все'}",
         reply_markup=_regions_list_kb(selected),
     )
     await call.answer()
@@ -1065,8 +1063,7 @@ async def cb_fsm_region_open(call: CallbackQuery, state: FSMContext):
     selected = list(data.get("fsm_cities", []))
     await state.update_data(fsm_current_region=region)
     await call.message.edit_text(
-        f"📍 <b>{region}</b>
-Выбери города:",
+        f"📍 <b>{region}</b>\nВыбери города:",
         parse_mode="HTML",
         reply_markup=_cities_in_region_kb(region, selected),
     )
@@ -1079,8 +1076,7 @@ async def cb_fsm_regions_back(call: CallbackQuery, state: FSMContext):
     selected = list(data.get("fsm_cities", []))
     await call.message.edit_text(
         _step(10, 13, "Шаг 10 — Города",
-              "Выбери регион, затем города внутри него.
-Можно выбрать города из нескольких регионов."),
+              "Выбери регион, затем города внутри него. Можно выбрать города из нескольких регионов."),
         parse_mode="HTML",
         reply_markup=_regions_list_kb(selected),
     )
