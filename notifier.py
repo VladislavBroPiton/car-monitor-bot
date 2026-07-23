@@ -179,6 +179,7 @@ async def process_listings(
             year=listing.year,
             mileage=listing.mileage,
             city=listing.city,
+            transmission=listing.transmission,
         )
 
         # Записываем цену в историю
