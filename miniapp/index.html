@@ -215,11 +215,25 @@ body.light{--bg:#F5F5F7;--bg2:#FFFFFF;--bg3:#F0F0F3;--bg4:#E8E8ED;--border:rgba(
 <!-- LISTINGS -->
 <div class="page" id="page-listings">
   <div class="hdr"><h1>📋 Объявления</h1><div class="hdr-sub" id="lst-sub">Загрузка...</div></div>
+  <div style="padding:12px 16px 0">
+    <input type="search" id="lst-search" placeholder="🔍 Поиск по объявлениям..."
+      oninput="searchListings(this.value)"
+      style="width:100%;padding:10px 14px;border-radius:10px;border:1px solid var(--border);background:var(--bg2);color:var(--text);font-size:14px;outline:none">
+  </div>
   <div class="src-tabs">
     <button class="src-tab active" onclick="setSource('',this)">Все</button>
     <button class="src-tab" onclick="setSource('autoru',this)">🔵 Auto.ru</button>
     <button class="src-tab" onclick="setSource('avito',this)">🟢 Авито</button>
     <button class="src-tab" onclick="setSource('drom',this)">🟠 Дром</button>
+  </div>
+  <div style="display:flex;gap:8px;padding:8px 16px 0;flex-wrap:wrap">
+    <select id="lst-sort" onchange="sortListings()" style="flex:1;padding:7px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg2);color:var(--text);font-size:13px;outline:none">
+      <option value="date">По дате</option>
+      <option value="price_asc">Цена ↑</option>
+      <option value="price_desc">Цена ↓</option>
+      <option value="year_desc">Год ↓</option>
+      <option value="mileage_asc">Пробег ↑</option>
+    </select>
   </div>
   <div id="lst-list"></div>
   <button class="load-more" id="lst-more" onclick="loadMoreListings()" style="display:none">Загрузить ещё</button>
@@ -292,7 +306,56 @@ body.light{--bg:#F5F5F7;--bg2:#FFFFFF;--bg3:#F0F0F3;--bg4:#E8E8ED;--border:rgba(
   </div>
 
   <div class="card">
+    <div class="card-title">Уведомления</div>
+    <div class="setting-row">
+      <div class="setting-left">
+        <div class="setting-icon" style="background:rgba(34,197,94,0.15)">📉</div>
+        <div><div class="setting-label">Снижение цены</div><div class="setting-sub">Уведомлять когда цена падает</div></div>
+      </div>
+      <button class="toggle on" id="tog-price-drop" onclick="toggleSetting('notify_price_drop',this)"></button>
+    </div>
+    <div class="setting-row">
+      <div class="setting-left">
+        <div class="setting-icon" style="background:rgba(245,158,11,0.15)">💰</div>
+        <div>
+          <div class="setting-label">Порог цены</div>
+          <div class="setting-sub">Только объявления дешевле</div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <input type="number" id="inp-threshold" placeholder="—" step="50000"
+          style="width:110px;padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg3);color:var(--text);font-size:13px;text-align:right;outline:none"
+          onchange="saveThreshold(this.value)">
+        <span style="font-size:12px;color:var(--text2)">₽</span>
+      </div>
+    </div>
+    <div class="setting-row">
+      <div class="setting-left">
+        <div class="setting-icon" style="background:rgba(107,114,128,0.15)">🌙</div>
+        <div><div class="setting-label">Тихие часы</div><div class="setting-sub" id="quiet-label">Не беспокоить с 23:00 до 8:00</div></div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;padding:4px 0 8px">
+      <span style="font-size:12px;color:var(--text2)">с</span>
+      <input type="number" id="inp-quiet-from" min="0" max="23" value="23"
+        style="width:60px;padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg3);color:var(--text);font-size:13px;text-align:center;outline:none"
+        onchange="saveQuietHours()">
+      <span style="font-size:12px;color:var(--text2)">до</span>
+      <input type="number" id="inp-quiet-to" min="0" max="23" value="8"
+        style="width:60px;padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg3);color:var(--text);font-size:13px;text-align:center;outline:none"
+        onchange="saveQuietHours()">
+    </div>
+  </div>
+
+  <div class="card">
     <div class="card-title">Данные</div>
+    <div class="setting-row">
+      <div class="setting-left">
+        <div class="setting-icon" style="background:rgba(59,130,246,0.15)">📤</div>
+        <div><div class="setting-label">Экспорт избранного</div><div class="setting-sub">Скачать в CSV</div></div>
+      </div>
+      <button class="btn btn-primary" style="padding:7px 12px;font-size:12px" onclick="exportFavorites()">CSV</button>
+    </div>
     <div class="setting-row">
       <div class="setting-left">
         <div class="setting-icon" style="background:rgba(239,68,68,0.1)">🗑</div>
@@ -681,9 +744,199 @@ document.getElementById('page-dashboard').addEventListener('touchend', async ()=
   ptStart=0;
 },{passive:true});
 
+// ── Search & Sort ────────────────────────────────────────────────────────────
+let allListings = [];
+let searchQuery = '';
+let lstSortMode = 'date';
+
+function searchListings(q) {
+  searchQuery = q.toLowerCase();
+  renderListingsFiltered();
+}
+
+function sortListings() {
+  lstSortMode = document.getElementById('lst-sort').value;
+  renderListingsFiltered();
+}
+
+function renderListingsFiltered() {
+  let items = [...allListings];
+  if(searchQuery) {
+    items = items.filter(l =>
+      (l.title||'').toLowerCase().includes(searchQuery) ||
+      (l.city||'').toLowerCase().includes(searchQuery)
+    );
+  }
+  if(lstSortMode === 'price_asc')  items.sort((a,b)=>(a.price||0)-(b.price||0));
+  if(lstSortMode === 'price_desc') items.sort((a,b)=>(b.price||0)-(a.price||0));
+  if(lstSortMode === 'year_desc')  items.sort((a,b)=>(b.year||0)-(a.year||0));
+  if(lstSortMode === 'mileage_asc') items.sort((a,b)=>(a.mileage||0)-(b.mileage||0));
+  const list = document.getElementById('lst-list');
+  if(!items.length) {
+    list.innerHTML = '<div class="empty"><div class="empty-icon">🔍</div><div class="empty-title">Ничего не найдено</div></div>';
+    return;
+  }
+  list.innerHTML = items.map(l => listingCard(l, isFav(l))).join('');
+}
+
+// Переопределяем loadListings чтобы кешировать все объявления
+const _origLoad = loadListings;
+async function loadListings(reset=false) {
+  const list = document.getElementById('lst-list');
+  if(reset){ list.innerHTML='<div class="spinner"></div>'; lstPage=1; allListings=[]; }
+  try {
+    const url = `${BASE}/api/listings?page=${lstPage}&limit=50${lstSource?'&source='+lstSource:''}`;
+    const r = await fetch(url);
+    const d = await r.json();
+    document.getElementById('lst-sub').textContent = `${d.total} объявлений`;
+    if(reset) allListings = d.items;
+    else allListings = [...allListings, ...d.items];
+    lstHasMore = lstPage < d.pages;
+    document.getElementById('lst-more').style.display = lstHasMore ? 'flex' : 'none';
+    renderListingsFiltered();
+  } catch {
+    list.innerHTML='<div class="empty"><div class="empty-icon">⚠️</div><div class="empty-title">Ошибка загрузки</div></div>';
+  }
+}
+
+// ── Share listing ─────────────────────────────────────────────────────────────
+function shareListing(url, title) {
+  if(tg && tg.shareURL) {
+    tg.shareURL(url, title);
+  } else if(navigator.share) {
+    navigator.share({ title, url });
+  } else {
+    navigator.clipboard?.writeText(url);
+    toast('🔗 Ссылка скопирована');
+  }
+}
+
+// ── Swipe to fav ──────────────────────────────────────────────────────────────
+function addSwipe(el) {
+  let startX = 0, startY = 0;
+  el.addEventListener('touchstart', e => {
+    startX = e.touches[0].clientX;
+    startY = e.touches[0].clientY;
+  }, {passive:true});
+  el.addEventListener('touchend', e => {
+    const dx = e.changedTouches[0].clientX - startX;
+    const dy = Math.abs(e.changedTouches[0].clientY - startY);
+    if(dy > 30) return; // вертикальный скролл
+    if(dx < -60) { // свайп влево — скрыть
+      el.style.transition = 'transform .25s,opacity .25s';
+      el.style.transform = 'translateX(-100%)';
+      el.style.opacity = '0';
+      setTimeout(() => el.remove(), 250);
+    }
+  }, {passive:true});
+}
+
+// Переопределяем listingCard чтобы добавить кнопку поделиться
+const _origCard = listingCard;
+function listingCard(l, faved=false) {
+  const specs = [l.year?l.year+' г.':'', fmtM(l.mileage)].filter(Boolean).join(' · ');
+  const eid = (l.external_id||'').replace(/'/g,"\'");
+  const url = (l.url||'').replace(/'/g,"\'");
+  const ttl = (l.title||'').replace(/'/g,"\'");
+  const cty = (l.city||'').replace(/'/g,"\'");
+  return `
+    <div class="listing-card" id="lc-${l.source}-${l.external_id}">
+      <div class="listing-src">${srcIcon(l.source)} ${srcName(l.source)}</div>
+      <div class="listing-title">${l.title||'Авто'}</div>
+      <div class="listing-price">${fmtP(l.price)}</div>
+      ${specs?`<div class="listing-specs">${specs}</div>`:''}
+      ${l.city?`<div class="listing-city">📍 ${l.city}</div>`:''}
+      <div class="listing-footer">
+        <a class="btn-open" href="${l.url}" target="_blank">🔗 Открыть</a>
+        <button class="btn-fav ${faved?'active':''}"
+          onclick="toggleFav(this,'${l.source}','${eid}','${url}','${ttl}',${l.price||0},${l.year||0},${l.mileage||0},'${cty}')">
+          ${faved?'⭐️':'☆'}
+        </button>
+        <button class="btn-fav" onclick="shareListing('${url}','${ttl}')" title="Поделиться">↗</button>
+      </div>
+    </div>`;
+}
+
+// ── Notification settings ─────────────────────────────────────────────────────
+let notifSettings = {};
+
+async function loadNotifSettings() {
+  try {
+    const r = await fetch(`${BASE}/api/settings`);
+    notifSettings = await r.json();
+    const tog = document.getElementById('tog-price-drop');
+    if(tog) tog.className = 'toggle ' + (notifSettings.notify_price_drop ? 'on' : '');
+    const th = document.getElementById('inp-threshold');
+    if(th && notifSettings.price_threshold) th.value = notifSettings.price_threshold;
+    const qf = document.getElementById('inp-quiet-from');
+    const qt = document.getElementById('inp-quiet-to');
+    if(qf) qf.value = notifSettings.quiet_from ?? 23;
+    if(qt) qt.value = notifSettings.quiet_to ?? 8;
+    updateQuietLabel();
+  } catch {}
+}
+
+function updateQuietLabel() {
+  const qf = document.getElementById('inp-quiet-from')?.value ?? 23;
+  const qt = document.getElementById('inp-quiet-to')?.value ?? 8;
+  const lbl = document.getElementById('quiet-label');
+  if(lbl) lbl.textContent = `Не беспокоить с ${qf}:00 до ${qt}:00`;
+}
+
+async function saveSettings() {
+  try {
+    await fetch(`${BASE}/api/settings`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(notifSettings)
+    });
+  } catch {}
+}
+
+function toggleSetting(key, btn) {
+  notifSettings[key] = !notifSettings[key];
+  btn.className = 'toggle ' + (notifSettings[key] ? 'on' : '');
+  saveSettings();
+  toast(notifSettings[key] ? '✅ Включено' : '⏸ Выключено');
+}
+
+function saveThreshold(val) {
+  notifSettings.price_threshold = val ? parseInt(val) : null;
+  saveSettings();
+  toast('💰 Порог цены сохранён');
+}
+
+function saveQuietHours() {
+  notifSettings.quiet_from = parseInt(document.getElementById('inp-quiet-from').value);
+  notifSettings.quiet_to   = parseInt(document.getElementById('inp-quiet-to').value);
+  updateQuietLabel();
+  saveSettings();
+  toast('🌙 Тихие часы сохранены');
+}
+
+// ── Export CSV ────────────────────────────────────────────────────────────────
+function exportFavorites() {
+  if(!favorites.length) { toast('Избранное пусто'); return; }
+  const header = 'Название,Цена,Год,Пробег,Город,Источник,Ссылка';
+  const rows = favorites.map(l =>
+    [l.title, l.price, l.year, l.mileage, l.city, l.source, l.url]
+      .map(v => `"${(v||'').toString().replace(/"/g,'""')}"`)
+      .join(',')
+  );
+  const csv = [header, ...rows].join('
+');
+  const blob = new Blob(['﻿'+csv], {type:'text/csv;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'car_favorites.csv';
+  a.click();
+  toast('📤 CSV скачан');
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 loadDashboard();
 loadFavorites();
+loadNotifSettings();
 </script>
 </body>
 </html>
