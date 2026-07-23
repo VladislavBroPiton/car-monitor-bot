@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS seen_listings (
     year        INTEGER,
     mileage     INTEGER,
     city        TEXT,
+    transmission TEXT,
     created_at  TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE (source, external_id)
 );
@@ -56,6 +57,7 @@ CREATE TABLE IF NOT EXISTS favorites (
     year        INTEGER,
     mileage     INTEGER,
     city        TEXT,
+    transmission TEXT,
     filter_name TEXT,
     created_at  TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE (user_id, source, external_id)
