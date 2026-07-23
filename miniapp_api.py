@@ -25,7 +25,7 @@ async def api_stats():
 
     # Последние 10 объявлений
     recent = await pool.fetch(
-        "SELECT source, title, price, city, created_at FROM seen_listings ORDER BY created_at DESC LIMIT 10"
+        "SELECT source, external_id, url, title, price, city, created_at FROM seen_listings ORDER BY created_at DESC LIMIT 20"
     )
 
     # Активность по часам за последние 24ч (для графика)
