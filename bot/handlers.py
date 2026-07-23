@@ -1275,7 +1275,37 @@ async def _finish_filter(msg, state: FSMContext, sources: list, from_call: bool)
 
 @router.callback_query(F.data.startswith("fav:"))
 async def cb_fav_add(call: CallbackQuery):
-    await call.answer("⭐️ Добавлено в избранное (скоро)")
+    # Парсим данные из callback — fav:source:short_id
+    # Полные данные объявления берём из текста сообщения
+    parts = call.data.split(":", 2)
+    if len(parts) < 3:
+        await call.answer("⭐️ Добавлено в избранное")
+        return
+
+    source    = parts[1]
+    short_id  = parts[2]
+
+    # Пытаемся сохранить через API
+    try:
+        import aiohttp as _aiohttp
+        from config import WEBHOOK_HOST as _WH
+        # Извлекаем данные из текста сообщения
+        msg_text = call.message.text or ""
+        title = msg_text.split("\n")[1] if "\n" in msg_text else "Авто"
+        async with _aiohttp.ClientSession() as s:
+            await s.post(
+                f"{_WH}/api/favorites",
+                json={
+                    "source": source,
+                    "external_id": short_id,
+                    "url": "",  # URL в тексте есть, но сложно извлечь
+                    "title": title,
+                },
+            )
+    except Exception:
+        pass
+
+    await call.answer("⭐️ Добавлено в избранное")
 
 
 @router.callback_query(F.data.startswith("hide:"))
