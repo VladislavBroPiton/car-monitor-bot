@@ -65,25 +65,40 @@ async def api_stats():
 async def api_listings(page: int = 1, source: str = "", limit: int = 20):
     pool = await get_pool()
     offset = (page - 1) * limit
-    where = "WHERE source = $3" if source else ""
-    args = [limit, offset]
-    if source:
-        args.append(source)
 
-    rows = await pool.fetch(
-        f"SELECT * FROM seen_listings {where} ORDER BY created_at DESC LIMIT $1 OFFSET $2",
-        *args
-    )
-    total = await pool.fetchval(
-        f"SELECT COUNT(*) FROM seen_listings {where}",
-        *(args[2:] if source else [])
-    )
-    return {
-        "items": [dict(r) for r in rows],
-        "total": total,
-        "page":  page,
-        "pages": (total + limit - 1) // limit,
-    }
+    try:
+        if source:
+            rows = await pool.fetch(
+                "SELECT * FROM seen_listings WHERE source = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+                source, limit, offset
+            )
+            total = await pool.fetchval(
+                "SELECT COUNT(*) FROM seen_listings WHERE source = $1", source
+            )
+        else:
+            rows = await pool.fetch(
+                "SELECT * FROM seen_listings ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+                limit, offset
+            )
+            total = await pool.fetchval("SELECT COUNT(*) FROM seen_listings")
+
+        def row_to_dict(r):
+            d = dict(r)
+            # Конвертируем datetime в строку
+            if 'created_at' in d and d['created_at']:
+                d['created_at'] = str(d['created_at'])
+            return d
+
+        return {
+            "items": [row_to_dict(r) for r in rows],
+            "total": total,
+            "page":  page,
+            "pages": max(1, (total + limit - 1) // limit),
+        }
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"api_listings error: {e}")
+        raise
 
 
 # ── Filters ───────────────────────────────────────────────────────────────────
