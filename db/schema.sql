@@ -60,3 +60,22 @@ CREATE TABLE IF NOT EXISTS favorites (
 
 CREATE INDEX IF NOT EXISTS idx_favorites_user
     ON favorites (user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS price_history (
+    id          SERIAL PRIMARY KEY,
+    source      TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    price       INTEGER NOT NULL,
+    recorded_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_price_history_listing
+    ON price_history (source, external_id, recorded_at DESC);
+
+CREATE TABLE IF NOT EXISTS notification_settings (
+    user_id         BIGINT PRIMARY KEY,
+    price_threshold INTEGER DEFAULT NULL,
+    quiet_from      INTEGER DEFAULT 23,
+    quiet_to        INTEGER DEFAULT 8,
+    notify_price_drop BOOLEAN DEFAULT TRUE,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
