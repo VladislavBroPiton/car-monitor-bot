@@ -307,6 +307,11 @@ class AvitoParser(BaseParser):
 
         listings = _parse_cards(html, f.name, base_city)
 
+        # Логируем первые заголовки для отладки фильтра
+        if listings:
+            sample = [l.title for l in listings[:5]]
+            logger.info(f"avito: примеры заголовков: {sample}")
+
         # Фильтруем по марке/модели из заголовка
         if f.brand:
             before = len(listings)
