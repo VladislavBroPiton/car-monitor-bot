@@ -6,6 +6,7 @@ from typing import Optional
 import aiohttp
 from bs4 import BeautifulSoup
 
+from config import SCRAPER_API_KEY
 from parsers.base import BaseParser, Listing, SearchFilter
 
 logger = logging.getLogger(__name__)
@@ -229,25 +230,49 @@ def _matches_filter(title: str, brand: Optional[str], model: Optional[str]) -> b
 
 
 async def _fetch(url: str) -> Optional[str]:
-    await asyncio.sleep(random.uniform(1.5, 3.5))
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                url,
-                headers=_get_headers(),
-                timeout=aiohttp.ClientTimeout(total=30),
-                allow_redirects=True,
-            ) as resp:
-                if resp.status == 429:
-                    logger.warning(f"avito: 429 rate limit для {url}")
-                    return None
-                if resp.status != 200:
-                    logger.warning(f"avito: статус {resp.status} для {url}")
-                    return None
-                return await resp.text()
-    except Exception as e:
-        logger.error(f"avito: ошибка запроса {url}: {e}")
-        return None
+    """Запрос через ScraperAPI если ключ есть, иначе напрямую."""
+    if SCRAPER_API_KEY:
+        # Через ScraperAPI — обходит блокировку US IP
+        scraper_url = (
+            f"https://api.scraperapi.com/"
+            f"?api_key={SCRAPER_API_KEY}"
+            f"&url={url}"
+            f"&country_code=ru"  # российский IP
+        )
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    scraper_url,
+                    timeout=aiohttp.ClientTimeout(total=60),
+                ) as resp:
+                    if resp.status != 200:
+                        logger.warning(f"avito: ScraperAPI статус {resp.status} для {url}")
+                        return None
+                    return await resp.text()
+        except Exception as e:
+            logger.error(f"avito: ScraperAPI ошибка для {url}: {e}")
+            return None
+    else:
+        # Прямой запрос (для локальной разработки)
+        await asyncio.sleep(random.uniform(1.5, 3.5))
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url,
+                    headers=_get_headers(),
+                    timeout=aiohttp.ClientTimeout(total=30),
+                    allow_redirects=True,
+                ) as resp:
+                    if resp.status == 429:
+                        logger.warning(f"avito: 429 rate limit для {url}")
+                        return None
+                    if resp.status != 200:
+                        logger.warning(f"avito: статус {resp.status} для {url}")
+                        return None
+                    return await resp.text()
+        except Exception as e:
+            logger.error(f"avito: ошибка запроса {url}: {e}")
+            return None
 
 
 class AvitoParser(BaseParser):
