@@ -6,743 +6,684 @@
 <title>Car Monitor</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0D0D0F;--bg2:#161618;--bg3:#1E1E22;--bg4:#252528;
+  --border:rgba(255,255,255,0.08);--border2:rgba(255,255,255,0.05);
+  --accent:#3B82F6;--accent2:#60A5FA;--accent-dim:rgba(59,130,246,0.15);
+  --green:#22C55E;--orange:#F59E0B;--red:#EF4444;
+  --text:#E8E8F0;--text2:#9CA3AF;--text3:#4B5563;
+  --r:14px;--r-sm:8px;--r-xs:6px;
+}
+html,body{background:var(--bg);color:var(--text);font-family:-apple-system,'SF Pro Display','Segoe UI',sans-serif;font-size:15px;line-height:1.5;min-height:100vh;overflow-x:hidden;-webkit-tap-highlight-color:transparent}
 
-  :root {
-    --bg:        #0D0D0F;
-    --bg2:       #161618;
-    --bg3:       #1E1E22;
-    --border:    rgba(255,255,255,0.08);
-    --accent:    #3B82F6;
-    --accent2:   #60A5FA;
-    --green:     #22C55E;
-    --orange:    #F59E0B;
-    --red:       #EF4444;
-    --text:      #E8E8F0;
-    --text2:     #9CA3AF;
-    --text3:     #4B5563;
-    --radius:    14px;
-    --radius-sm: 8px;
-  }
+/* ── Layout ── */
+#app{display:flex;flex-direction:column;min-height:100vh}
+.page{flex:1;padding-bottom:80px;display:none;overflow-y:auto}
+.page.active{display:block}
 
-  html, body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: -apple-system, 'Inter', 'Segoe UI', sans-serif;
-    font-size: 15px;
-    line-height: 1.5;
-    min-height: 100vh;
-    overflow-x: hidden;
-  }
+/* ── Header ── */
+.hdr{position:sticky;top:0;z-index:10;background:rgba(13,13,15,0.9);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);padding:16px 20px 14px;border-bottom:1px solid var(--border)}
+.hdr h1{font-size:20px;font-weight:700;letter-spacing:-0.4px;display:flex;align-items:center;gap:8px}
+.hdr-sub{font-size:12px;color:var(--text2);margin-top:2px}
 
-  /* ── Layout ── */
-  #app { display: flex; flex-direction: column; min-height: 100vh; }
-  .page { flex: 1; padding: 0 0 80px; display: none; }
-  .page.active { display: block; }
+/* ── Nav ── */
+.nav{position:fixed;bottom:0;left:0;right:0;z-index:20;display:flex;background:rgba(18,18,20,0.96);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-top:1px solid var(--border);padding-bottom:env(safe-area-inset-bottom,0)}
+.nav-btn{flex:1;display:flex;flex-direction:column;align-items:center;padding:8px 4px 10px;cursor:pointer;border:none;background:none;color:var(--text3);font-size:10px;font-weight:500;gap:3px;transition:color .15s;position:relative}
+.nav-btn svg{width:22px;height:22px}
+.nav-btn.active{color:var(--accent)}
+.nav-dot{position:absolute;top:6px;right:calc(50% - 16px);width:7px;height:7px;background:var(--red);border-radius:50%;border:2px solid var(--bg)}
 
-  /* ── Header ── */
-  .header {
-    position: sticky; top: 0; z-index: 10;
-    background: rgba(13,13,15,0.92);
-    backdrop-filter: blur(12px);
-    padding: 16px 20px 12px;
-    border-bottom: 1px solid var(--border);
-  }
-  .header h1 { font-size: 20px; font-weight: 700; letter-spacing: -0.3px; }
-  .header p  { font-size: 13px; color: var(--text2); margin-top: 2px; }
+/* ── Cards ── */
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:16px;margin:12px 16px 0}
+.card-title{font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.7px;margin-bottom:12px}
 
-  /* ── Bottom nav ── */
-  .nav {
-    position: fixed; bottom: 0; left: 0; right: 0; z-index: 20;
-    display: flex;
-    background: rgba(22,22,24,0.96);
-    backdrop-filter: blur(16px);
-    border-top: 1px solid var(--border);
-    padding-bottom: env(safe-area-inset-bottom, 0);
-  }
-  .nav-item {
-    flex: 1; display: flex; flex-direction: column; align-items: center;
-    padding: 10px 4px;
-    cursor: pointer; border: none; background: none;
-    color: var(--text3); font-size: 10px; font-weight: 500;
-    transition: color .15s;
-    gap: 4px;
-  }
-  .nav-item svg { width: 22px; height: 22px; }
-  .nav-item.active { color: var(--accent); }
-  .nav-badge {
-    position: absolute; top: 6px; right: calc(50% - 18px);
-    background: var(--red); color: #fff;
-    font-size: 9px; font-weight: 700;
-    min-width: 16px; height: 16px;
-    border-radius: 8px; padding: 0 4px;
-    display: flex; align-items: center; justify-content: center;
-  }
+/* ── Stats grid ── */
+.stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:16px 16px 0}
+.stat-box{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:16px}
+.stat-num{font-size:30px;font-weight:800;letter-spacing:-1.5px;line-height:1}
+.stat-num.blue{background:linear-gradient(135deg,#3B82F6,#60A5FA);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.stat-num.green{background:linear-gradient(135deg,#22C55E,#4ADE80);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.stat-num.orange{background:linear-gradient(135deg,#F59E0B,#FCD34D);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.stat-num.purple{background:linear-gradient(135deg,#A855F7,#C084FC);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.stat-label{font-size:12px;color:var(--text2);margin-top:4px}
 
-  /* ── Cards ── */
-  .card {
-    background: var(--bg2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 16px;
-    margin: 12px 16px 0;
-  }
-  .card-title {
-    font-size: 12px; font-weight: 600;
-    color: var(--text2); text-transform: uppercase;
-    letter-spacing: 0.6px; margin-bottom: 12px;
-  }
+/* ── Chart ── */
+.chart-wrap{padding:0 16px 0;margin-top:12px}
+.chart-title{font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.7px;margin-bottom:10px}
+.chart-tabs{display:flex;gap:4px;margin-bottom:10px}
+.chart-tab{padding:4px 12px;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text2);transition:all .15s}
+.chart-tab.active{background:var(--accent-dim);border-color:var(--accent);color:var(--accent)}
+.chart-canvas-wrap{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:16px;overflow:hidden}
+canvas#chart{width:100%;height:120px;display:block}
 
-  /* ── Dashboard ── */
-  .stats-grid {
-    display: grid; grid-template-columns: 1fr 1fr;
-    gap: 10px; padding: 16px 16px 0;
-  }
-  .stat-box {
-    background: var(--bg2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 16px;
-    display: flex; flex-direction: column; gap: 4px;
-  }
-  .stat-num {
-    font-size: 28px; font-weight: 800;
-    letter-spacing: -1px;
-    background: linear-gradient(135deg, var(--accent), var(--accent2));
-    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-  }
-  .stat-num.green { background: linear-gradient(135deg, #22C55E, #4ADE80); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-  .stat-num.orange { background: linear-gradient(135deg, #F59E0B, #FCD34D); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-  .stat-label { font-size: 12px; color: var(--text2); }
+/* ── Source chips ── */
+.chips-row{display:flex;gap:8px;flex-wrap:wrap;padding:12px 16px 0}
+.chip{display:flex;align-items:center;gap:5px;background:var(--bg2);border:1px solid var(--border);border-radius:20px;padding:6px 12px;font-size:12px;font-weight:500}
+.chip-dot{width:7px;height:7px;border-radius:50%}
 
-  .sources-row {
-    display: flex; gap: 8px; flex-wrap: wrap; padding: 12px 16px 0;
-  }
-  .source-chip {
-    display: flex; align-items: center; gap: 6px;
-    background: var(--bg2); border: 1px solid var(--border);
-    border-radius: 20px; padding: 6px 12px;
-    font-size: 13px;
-  }
-  .source-dot {
-    width: 8px; height: 8px; border-radius: 50%;
-  }
+/* ── Activity ── */
+.act-item{display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--border2)}
+.act-item:last-child{border-bottom:none}
+.act-icon{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:15px}
+.act-icon.autoru{background:rgba(59,130,246,0.15)}
+.act-icon.avito{background:rgba(34,197,94,0.15)}
+.act-icon.drom{background:rgba(245,158,11,0.15)}
+.act-body{flex:1;min-width:0}
+.act-title{font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.act-sub{font-size:11px;color:var(--text2);margin-top:1px}
+.act-time{font-size:11px;color:var(--text3);flex-shrink:0}
 
-  /* ── Activity feed ── */
-  .activity-item {
-    display: flex; align-items: flex-start; gap: 12px;
-    padding: 12px 0;
-    border-bottom: 1px solid var(--border);
-  }
-  .activity-item:last-child { border-bottom: none; }
-  .activity-icon {
-    width: 36px; height: 36px; border-radius: 50%;
-    background: rgba(59,130,246,0.15);
-    display: flex; align-items: center; justify-content: center;
-    flex-shrink: 0; font-size: 16px;
-  }
-  .activity-text { flex: 1; }
-  .activity-title { font-size: 14px; font-weight: 500; }
-  .activity-sub { font-size: 12px; color: var(--text2); margin-top: 2px; }
-  .activity-time { font-size: 11px; color: var(--text3); flex-shrink: 0; }
+/* ── Run btn ── */
+.run-btn{display:flex;align-items:center;justify-content:center;gap:8px;width:calc(100% - 32px);margin:12px 16px 0;padding:15px;border-radius:var(--r);background:linear-gradient(135deg,#3B82F6,#2563EB);border:none;color:#fff;font-size:15px;font-weight:700;cursor:pointer;box-shadow:0 4px 24px rgba(59,130,246,0.35);transition:opacity .15s}
+.run-btn:active{opacity:.8}
+.run-btn:disabled{opacity:.5}
 
-  /* ── Filters ── */
-  .filter-card {
-    background: var(--bg2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    margin: 12px 16px 0;
-    overflow: hidden;
-  }
-  .filter-header {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 14px 16px;
-    cursor: pointer;
-  }
-  .filter-header-left { display: flex; align-items: center; gap: 10px; }
-  .filter-status {
-    width: 8px; height: 8px; border-radius: 50%;
-    background: var(--green);
-    flex-shrink: 0;
-  }
-  .filter-status.paused { background: var(--text3); }
-  .filter-name { font-size: 15px; font-weight: 600; }
-  .filter-meta { font-size: 12px; color: var(--text2); margin-top: 1px; }
-  .filter-chevron {
-    color: var(--text3); font-size: 18px;
-    transition: transform .2s;
-  }
-  .filter-chevron.open { transform: rotate(180deg); }
-  .filter-body {
-    display: none; padding: 0 16px 16px;
-    border-top: 1px solid var(--border);
-  }
-  .filter-body.open { display: block; }
-  .filter-row {
-    display: flex; justify-content: space-between;
-    padding: 8px 0;
-    border-bottom: 1px solid var(--border);
-    font-size: 13px;
-  }
-  .filter-row:last-child { border-bottom: none; }
-  .filter-row-label { color: var(--text2); }
-  .filter-row-value { font-weight: 500; text-align: right; max-width: 60%; }
-  .filter-actions {
-    display: flex; gap: 8px; margin-top: 14px;
-  }
-  .btn {
-    border: none; border-radius: var(--radius-sm);
-    padding: 8px 14px; font-size: 13px; font-weight: 600;
-    cursor: pointer; transition: opacity .15s;
-  }
-  .btn:active { opacity: 0.7; }
-  .btn-primary { background: var(--accent); color: #fff; flex: 1; }
-  .btn-danger  { background: rgba(239,68,68,0.15); color: var(--red); }
-  .btn-neutral { background: var(--bg3); color: var(--text2); }
+/* ── Pull to refresh ── */
+.ptr{display:flex;align-items:center;justify-content:center;height:0;overflow:hidden;transition:height .2s;color:var(--text2);font-size:13px;gap:8px}
+.ptr.show{height:48px}
 
-  .add-filter-btn {
-    display: flex; align-items: center; justify-content: center; gap: 8px;
-    width: calc(100% - 32px); margin: 12px 16px 0;
-    padding: 14px; border-radius: var(--radius);
-    background: rgba(59,130,246,0.1);
-    border: 1px dashed rgba(59,130,246,0.4);
-    color: var(--accent); font-size: 14px; font-weight: 600;
-    cursor: pointer; transition: background .15s;
-  }
-  .add-filter-btn:active { background: rgba(59,130,246,0.2); }
+/* ── Filters ── */
+.filter-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);margin:10px 16px 0;overflow:hidden}
+.filter-hdr{display:flex;align-items:center;gap:10px;padding:14px 16px;cursor:pointer}
+.filter-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;background:var(--green)}
+.filter-dot.off{background:var(--text3)}
+.filter-info{flex:1;min-width:0}
+.filter-name{font-size:15px;font-weight:600}
+.filter-meta{font-size:12px;color:var(--text2);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.filter-arr{color:var(--text3);font-size:20px;transition:transform .2s;line-height:1}
+.filter-arr.open{transform:rotate(90deg)}
+.filter-body{display:none;padding:0 16px 14px;border-top:1px solid var(--border)}
+.filter-body.open{display:block}
+.frow{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border2);font-size:13px}
+.frow:last-of-type{border-bottom:none}
+.frow-l{color:var(--text2)}
+.frow-r{font-weight:500;text-align:right;max-width:55%}
+.filter-btns{display:flex;gap:8px;margin-top:12px}
+.btn{border:none;border-radius:var(--r-sm);padding:9px 14px;font-size:13px;font-weight:600;cursor:pointer;transition:opacity .15s}
+.btn:active{opacity:.7}
+.btn-primary{background:var(--accent);color:#fff;flex:1}
+.btn-warn{background:rgba(245,158,11,0.15);color:var(--orange)}
+.btn-danger{background:rgba(239,68,68,0.1);color:var(--red)}
+.add-btn{display:flex;align-items:center;justify-content:center;gap:8px;width:calc(100% - 32px);margin:12px 16px 0;padding:14px;border-radius:var(--r);background:var(--accent-dim);border:1px dashed rgba(59,130,246,0.4);color:var(--accent);font-size:14px;font-weight:600;cursor:pointer}
 
-  /* ── Listings ── */
-  .listing-card {
-    background: var(--bg2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    margin: 10px 16px 0;
-    padding: 14px;
-    position: relative;
-  }
-  .listing-source {
-    display: inline-flex; align-items: center; gap: 5px;
-    font-size: 11px; font-weight: 600; color: var(--accent2);
-    margin-bottom: 6px;
-  }
-  .listing-title { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
-  .listing-price {
-    font-size: 20px; font-weight: 800; letter-spacing: -0.5px;
-    color: var(--text); margin-bottom: 6px;
-  }
-  .listing-specs { font-size: 12px; color: var(--text2); }
-  .listing-city { font-size: 12px; color: var(--text2); margin-top: 2px; }
-  .listing-footer {
-    display: flex; gap: 8px; margin-top: 12px;
-  }
-  .btn-open {
-    flex: 1; background: var(--accent); color: #fff;
-    border: none; border-radius: var(--radius-sm);
-    padding: 9px; font-size: 13px; font-weight: 600;
-    cursor: pointer; text-decoration: none;
-    display: flex; align-items: center; justify-content: center;
-  }
-  .btn-unfav {
-    background: var(--bg3); border: 1px solid var(--border);
-    border-radius: var(--radius-sm); padding: 9px 12px;
-    font-size: 13px; cursor: pointer; border: none;
-  }
+/* ── Listings tab ── */
+.src-tabs{display:flex;gap:6px;padding:12px 16px 0;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.src-tab{padding:6px 14px;border-radius:20px;font-size:13px;font-weight:500;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text2);white-space:nowrap;transition:all .15s;flex-shrink:0}
+.src-tab.active{background:var(--accent-dim);border-color:var(--accent);color:var(--accent)}
+.listing-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);margin:10px 16px 0;padding:14px}
+.listing-src{font-size:11px;font-weight:600;color:var(--accent2);margin-bottom:5px;display:flex;align-items:center;gap:4px}
+.listing-title{font-size:14px;font-weight:600;margin-bottom:5px}
+.listing-price{font-size:20px;font-weight:800;letter-spacing:-0.5px;margin-bottom:4px}
+.listing-specs{font-size:12px;color:var(--text2)}
+.listing-city{font-size:12px;color:var(--text2);margin-top:2px}
+.listing-footer{display:flex;gap:8px;margin-top:11px}
+.btn-open{flex:1;background:var(--accent);color:#fff;border:none;border-radius:var(--r-sm);padding:9px;font-size:13px;font-weight:600;cursor:pointer;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:5px}
+.btn-fav{background:var(--bg3);border:1px solid var(--border);border-radius:var(--r-sm);padding:9px 13px;font-size:14px;cursor:pointer;border:none}
+.btn-fav.active{background:rgba(245,158,11,0.15)}
+.load-more{display:flex;align-items:center;justify-content:center;width:calc(100% - 32px);margin:12px 16px 0;padding:12px;border-radius:var(--r-sm);background:var(--bg2);border:1px solid var(--border);color:var(--text2);font-size:13px;font-weight:500;cursor:pointer}
 
-  /* ── Empty state ── */
-  .empty {
-    display: flex; flex-direction: column; align-items: center;
-    padding: 48px 32px; text-align: center; gap: 12px;
-  }
-  .empty-icon { font-size: 48px; opacity: 0.4; }
-  .empty-title { font-size: 17px; font-weight: 600; }
-  .empty-text { font-size: 13px; color: var(--text2); line-height: 1.6; }
+/* ── Favorites ── */
+.fav-sort{display:flex;gap:6px;padding:12px 16px 0;overflow-x:auto}
+.fav-sort-btn{padding:5px 12px;border-radius:12px;font-size:12px;font-weight:500;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text2);white-space:nowrap;transition:all .15s}
+.fav-sort-btn.active{background:var(--accent-dim);border-color:var(--accent);color:var(--accent)}
+.fav-empty-actions{display:flex;flex-direction:column;gap:8px;width:100%;margin-top:8px}
 
-  /* ── Loading ── */
-  .spinner {
-    width: 32px; height: 32px; border: 3px solid var(--border);
-    border-top-color: var(--accent);
-    border-radius: 50%; animation: spin .6s linear infinite;
-    margin: 40px auto;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
+/* ── Settings ── */
+.setting-row{display:flex;align-items:center;justify-content:space-between;padding:13px 0;border-bottom:1px solid var(--border2)}
+.setting-row:last-child{border-bottom:none}
+.setting-left{display:flex;align-items:center;gap:10px}
+.setting-icon{width:32px;height:32px;border-radius:var(--r-xs);display:flex;align-items:center;justify-content:center;font-size:16px}
+.setting-label{font-size:14px;font-weight:500}
+.setting-sub{font-size:12px;color:var(--text2);margin-top:1px}
+.status-badge{font-size:11px;font-weight:600;padding:3px 8px;border-radius:10px}
+.status-ok{background:rgba(34,197,94,0.15);color:var(--green)}
+.status-warn{background:rgba(245,158,11,0.15);color:var(--orange)}
+.status-err{background:rgba(239,68,68,0.1);color:var(--red)}
+/* Toggle */
+.toggle{width:44px;height:26px;background:var(--bg3);border-radius:13px;position:relative;cursor:pointer;transition:background .2s;border:none;flex-shrink:0}
+.toggle::after{content:'';position:absolute;width:20px;height:20px;border-radius:50%;background:#fff;top:3px;left:3px;transition:transform .2s}
+.toggle.on{background:var(--accent)}
+.toggle.on::after{transform:translateX(18px)}
+/* Theme switch */
+.theme-options{display:flex;gap:6px;margin-top:10px}
+.theme-opt{flex:1;padding:10px;border-radius:var(--r-sm);border:1px solid var(--border);background:transparent;cursor:pointer;font-size:13px;color:var(--text2);text-align:center;transition:all .15s}
+.theme-opt.active{border-color:var(--accent);color:var(--accent);background:var(--accent-dim)}
 
-  /* ── Toast ── */
-  .toast {
-    position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%);
-    background: var(--bg3); border: 1px solid var(--border);
-    border-radius: 20px; padding: 10px 20px;
-    font-size: 13px; font-weight: 500;
-    opacity: 0; transition: opacity .2s;
-    pointer-events: none; white-space: nowrap; z-index: 100;
-  }
-  .toast.show { opacity: 1; }
+/* ── Empty / Loading ── */
+.empty{display:flex;flex-direction:column;align-items:center;padding:48px 32px;text-align:center;gap:10px}
+.empty-icon{font-size:48px;opacity:.35}
+.empty-title{font-size:17px;font-weight:600}
+.empty-text{font-size:13px;color:var(--text2);line-height:1.6}
+.spinner{width:28px;height:28px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;margin:36px auto}
+@keyframes spin{to{transform:rotate(360deg)}}
 
-  /* ── Chip tags ── */
-  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-  .chip {
-    background: var(--bg3); border: 1px solid var(--border);
-    border-radius: 12px; padding: 4px 10px;
-    font-size: 11px; color: var(--text2);
-  }
+/* ── Toast ── */
+.toast{position:fixed;bottom:88px;left:50%;transform:translateX(-50%);background:var(--bg3);border:1px solid var(--border);border-radius:20px;padding:10px 18px;font-size:13px;font-weight:500;opacity:0;transition:opacity .2s;pointer-events:none;white-space:nowrap;z-index:200;box-shadow:0 4px 20px rgba(0,0,0,0.4)}
+.toast.show{opacity:1}
 
-  /* ── Section padding ── */
-  .section-pad { padding: 16px 16px 0; }
+/* ── Light theme ── */
+body.light{--bg:#F5F5F7;--bg2:#FFFFFF;--bg3:#F0F0F3;--bg4:#E8E8ED;--border:rgba(0,0,0,0.08);--border2:rgba(0,0,0,0.05);--text:#1C1C1E;--text2:#6B6B7A;--text3:#AEAEB2}
 
-  /* ── Run button ── */
-  .run-btn {
-    display: flex; align-items: center; justify-content: center; gap: 8px;
-    width: calc(100% - 32px); margin: 12px 16px 0;
-    padding: 14px; border-radius: var(--radius);
-    background: linear-gradient(135deg, var(--accent), #2563EB);
-    border: none; color: #fff; font-size: 15px; font-weight: 700;
-    cursor: pointer; transition: opacity .15s;
-    box-shadow: 0 4px 20px rgba(59,130,246,0.3);
-  }
-  .run-btn:active { opacity: 0.8; }
-  .run-btn:disabled { opacity: 0.5; }
+@media(prefers-color-scheme:light){
+  body:not(.dark){--bg:#F5F5F7;--bg2:#FFFFFF;--bg3:#F0F0F3;--bg4:#E8E8ED;--border:rgba(0,0,0,0.08);--border2:rgba(0,0,0,0.05);--text:#1C1C1E;--text2:#6B6B7A;--text3:#AEAEB2}
+}
 </style>
 </head>
 <body>
 <div id="app">
 
-  <!-- ── DASHBOARD ── -->
-  <div class="page active" id="page-dashboard">
-    <div class="header">
-      <h1>🚗 Car Monitor</h1>
-      <p id="dash-subtitle">Загрузка...</p>
-    </div>
-
-    <div class="stats-grid">
-      <div class="stat-box">
-        <div class="stat-num green" id="stat-new">—</div>
-        <div class="stat-label">За сутки</div>
-      </div>
-      <div class="stat-box">
-        <div class="stat-num" id="stat-total">—</div>
-        <div class="stat-label">Всего просмотрено</div>
-      </div>
-      <div class="stat-box">
-        <div class="stat-num orange" id="stat-filters">—</div>
-        <div class="stat-label">Активных фильтров</div>
-      </div>
-      <div class="stat-box">
-        <div class="stat-num" id="stat-hour">—</div>
-        <div class="stat-label">За час</div>
-      </div>
-    </div>
-
-    <div class="sources-row">
-      <div class="source-chip">
-        <div class="source-dot" style="background:#3B82F6"></div>
-        Auto.ru
-      </div>
-      <div class="source-chip">
-        <div class="source-dot" style="background:#22C55E"></div>
-        Авито
-      </div>
-      <div class="source-chip">
-        <div class="source-dot" style="background:#6B7280"></div>
-        Дром (скоро)
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">Последняя активность</div>
-      <div id="activity-list">
-        <div class="spinner"></div>
-      </div>
-    </div>
-
-    <button class="run-btn" id="run-btn" onclick="runParser()">
-      ▶ Запустить парсер сейчас
-    </button>
+<!-- DASHBOARD -->
+<div class="page active" id="page-dashboard">
+  <div class="hdr">
+    <h1>🚗 Car Monitor</h1>
+    <div class="hdr-sub" id="dash-sub">Загрузка...</div>
+  </div>
+  <div class="ptr" id="ptr-dash">↻ Обновление...</div>
+  <div class="stats-grid">
+    <div class="stat-box"><div class="stat-num green" id="s-new">—</div><div class="stat-label">За сутки</div></div>
+    <div class="stat-box"><div class="stat-num blue"  id="s-total">—</div><div class="stat-label">Всего просмотрено</div></div>
+    <div class="stat-box"><div class="stat-num orange" id="s-filters">—</div><div class="stat-label">Активных фильтров</div></div>
+    <div class="stat-box"><div class="stat-num purple" id="s-hour">—</div><div class="stat-label">За час</div></div>
   </div>
 
-  <!-- ── FILTERS ── -->
-  <div class="page" id="page-filters">
-    <div class="header">
-      <h1>Фильтры</h1>
-      <p id="filters-subtitle">Загрузка...</p>
+  <div class="chart-wrap">
+    <div class="chart-title">Активность</div>
+    <div class="chart-tabs">
+      <button class="chart-tab active" onclick="setChartMode('hourly',this)">24 часа</button>
+      <button class="chart-tab" onclick="setChartMode('daily',this)">7 дней</button>
     </div>
-    <div id="filters-list"></div>
-    <button class="add-filter-btn" onclick="openTgBot()">
-      + Создать фильтр
-    </button>
-  </div>
-
-  <!-- ── FAVORITES ── -->
-  <div class="page" id="page-favorites">
-    <div class="header">
-      <h1>Избранное</h1>
-      <p id="fav-subtitle">Сохранённые объявления</p>
-    </div>
-    <div id="favorites-list"></div>
-  </div>
-
-  <!-- ── SETTINGS ── -->
-  <div class="page" id="page-settings">
-    <div class="header">
-      <h1>Настройки</h1>
-      <p>Управление ботом</p>
-    </div>
-
-    <div class="card">
-      <div class="card-title">Источники</div>
-      <div class="activity-item">
-        <div class="activity-icon">🔵</div>
-        <div class="activity-text">
-          <div class="activity-title">Auto.ru</div>
-          <div class="activity-sub">Работает · Cookies активны</div>
-        </div>
-        <div style="color:var(--green);font-size:12px;font-weight:600">ОК</div>
-      </div>
-      <div class="activity-item">
-        <div class="activity-icon">🟢</div>
-        <div class="activity-text">
-          <div class="activity-title">Авито</div>
-          <div class="activity-sub">Работает · через ScraperAPI</div>
-        </div>
-        <div style="color:var(--green);font-size:12px;font-weight:600">ОК</div>
-      </div>
-      <div class="activity-item">
-        <div class="activity-icon">🟠</div>
-        <div class="activity-text">
-          <div class="activity-title">Дром</div>
-          <div class="activity-sub">Заблокирован US IP · Нужен RU прокси</div>
-        </div>
-        <div style="color:var(--red);font-size:12px;font-weight:600">⚠️</div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">Расписание</div>
-      <div class="activity-item">
-        <div class="activity-icon">⏱</div>
-        <div class="activity-text">
-          <div class="activity-title">Cron-job.org</div>
-          <div class="activity-sub">Каждые 14 минут</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">Опасная зона</div>
-      <button class="btn btn-danger" style="width:100%;padding:12px;font-size:14px" onclick="clearSeen()">
-        🗑 Очистить историю просмотренных
-      </button>
+    <div class="chart-canvas-wrap">
+      <canvas id="chart"></canvas>
     </div>
   </div>
 
-  <!-- ── Bottom nav ── -->
-  <nav class="nav">
-    <button class="nav-item active" id="nav-dashboard" onclick="switchPage('dashboard')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>
-        <rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>
-      </svg>
-      Дашборд
-    </button>
-    <button class="nav-item" id="nav-filters" onclick="switchPage('filters')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <line x1="4" y1="6" x2="20" y2="6"/><line x1="8" y1="12" x2="16" y2="12"/>
-        <line x1="10" y1="18" x2="14" y2="18"/>
-      </svg>
-      Фильтры
-    </button>
-    <button class="nav-item" id="nav-favorites" onclick="switchPage('favorites')" style="position:relative">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
-      </svg>
-      Избранное
-      <span class="nav-badge" id="fav-badge" style="display:none">0</span>
-    </button>
-    <button class="nav-item" id="nav-settings" onclick="switchPage('settings')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <circle cx="12" cy="12" r="3"/>
-        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-      </svg>
-      Настройки
-    </button>
-  </nav>
+  <div class="chips-row">
+    <div class="chip"><div class="chip-dot" style="background:#3B82F6"></div>Auto.ru</div>
+    <div class="chip"><div class="chip-dot" style="background:#22C55E"></div>Авито</div>
+    <div class="chip"><div class="chip-dot" style="background:#4B5563"></div>Дром (скоро)</div>
+  </div>
 
+  <div class="card">
+    <div class="card-title">Последняя активность</div>
+    <div id="act-list"><div class="spinner"></div></div>
+  </div>
+
+  <button class="run-btn" id="run-btn" onclick="runParser()">▶&nbsp; Запустить парсер</button>
+</div>
+
+<!-- LISTINGS -->
+<div class="page" id="page-listings">
+  <div class="hdr"><h1>📋 Объявления</h1><div class="hdr-sub" id="lst-sub">Загрузка...</div></div>
+  <div class="src-tabs">
+    <button class="src-tab active" onclick="setSource('',this)">Все</button>
+    <button class="src-tab" onclick="setSource('autoru',this)">🔵 Auto.ru</button>
+    <button class="src-tab" onclick="setSource('avito',this)">🟢 Авито</button>
+    <button class="src-tab" onclick="setSource('drom',this)">🟠 Дром</button>
+  </div>
+  <div id="lst-list"></div>
+  <button class="load-more" id="lst-more" onclick="loadMoreListings()" style="display:none">Загрузить ещё</button>
+</div>
+
+<!-- FAVORITES -->
+<div class="page" id="page-favorites">
+  <div class="hdr"><h1>⭐️ Избранное</h1><div class="hdr-sub" id="fav-sub">Загрузка...</div></div>
+  <div class="fav-sort">
+    <button class="fav-sort-btn active" onclick="sortFav('date',this)">По дате</button>
+    <button class="fav-sort-btn" onclick="sortFav('price_asc',this)">Цена ↑</button>
+    <button class="fav-sort-btn" onclick="sortFav('price_desc',this)">Цена ↓</button>
+  </div>
+  <div id="fav-list"></div>
+</div>
+
+<!-- SETTINGS -->
+<div class="page" id="page-settings">
+  <div class="hdr"><h1>⚙️ Настройки</h1></div>
+
+  <div class="card">
+    <div class="card-title">Источники данных</div>
+    <div class="setting-row">
+      <div class="setting-left">
+        <div class="setting-icon" style="background:rgba(59,130,246,0.15)">🔵</div>
+        <div><div class="setting-label">Auto.ru</div><div class="setting-sub">Прямой API · Cookies</div></div>
+      </div>
+      <span class="status-badge status-ok">Активен</span>
+    </div>
+    <div class="setting-row">
+      <div class="setting-left">
+        <div class="setting-icon" style="background:rgba(34,197,94,0.15)">🟢</div>
+        <div><div class="setting-label">Авито</div><div class="setting-sub">ScraperAPI · 1000 req/мес</div></div>
+      </div>
+      <span class="status-badge status-ok">Активен</span>
+    </div>
+    <div class="setting-row">
+      <div class="setting-left">
+        <div class="setting-icon" style="background:rgba(107,114,128,0.15)">🟠</div>
+        <div><div class="setting-label">Дром</div><div class="setting-sub">Требует RU прокси</div></div>
+      </div>
+      <span class="status-badge status-warn">Отложен</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Расписание</div>
+    <div class="setting-row">
+      <div class="setting-left">
+        <div class="setting-icon" style="background:rgba(168,85,247,0.15)">⏱</div>
+        <div><div class="setting-label">Cron-job.org</div><div class="setting-sub">Каждые 14 минут</div></div>
+      </div>
+      <span class="status-badge status-ok">Активен</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Внешний вид</div>
+    <div class="setting-row">
+      <div class="setting-left">
+        <div class="setting-icon" style="background:rgba(59,130,246,0.15)">🎨</div>
+        <div><div class="setting-label">Тема</div></div>
+      </div>
+    </div>
+    <div class="theme-options">
+      <button class="theme-opt" id="th-auto" onclick="setTheme('auto',this)">Авто</button>
+      <button class="theme-opt active" id="th-dark" onclick="setTheme('dark',this)">Тёмная</button>
+      <button class="theme-opt" id="th-light" onclick="setTheme('light',this)">Светлая</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Данные</div>
+    <div class="setting-row">
+      <div class="setting-left">
+        <div class="setting-icon" style="background:rgba(239,68,68,0.1)">🗑</div>
+        <div><div class="setting-label">Очистить историю</div><div class="setting-sub">Бот пришлёт все объявления заново</div></div>
+      </div>
+      <button class="btn btn-danger" style="padding:7px 12px;font-size:12px" onclick="clearSeen()">Очистить</button>
+    </div>
+  </div>
+</div>
+
+<!-- NAV -->
+<nav class="nav">
+  <button class="nav-btn active" id="nav-dashboard" onclick="go('dashboard')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+    Дашборд
+  </button>
+  <button class="nav-btn" id="nav-listings" onclick="go('listings')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 12h6M9 8h6M9 16h4"/><path d="M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/></svg>
+    Объявления
+  </button>
+  <button class="nav-btn" id="nav-favorites" onclick="go('favorites')" style="position:relative">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+    Избранное
+    <div class="nav-dot" id="fav-dot" style="display:none"></div>
+  </button>
+  <button class="nav-btn" id="nav-settings" onclick="go('settings')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    Настройки
+  </button>
+</nav>
 </div>
 
 <div class="toast" id="toast"></div>
 
 <script>
-// ── Config ──────────────────────────────────────────────────────────────────
-const BASE_URL = 'https://car-monitor-bot-oov7.onrender.com';
-
-// ── Telegram WebApp ──────────────────────────────────────────────────────────
+const BASE = 'https://car-monitor-bot-oov7.onrender.com';
 const tg = window.Telegram?.WebApp;
-if (tg) {
-  tg.ready();
-  tg.expand();
-  tg.setHeaderColor('#0D0D0F');
-  tg.setBackgroundColor('#0D0D0F');
+if(tg){tg.ready();tg.expand();tg.setHeaderColor('#0D0D0F');tg.setBackgroundColor('#0D0D0F')}
+
+// ── State ────────────────────────────────────────────────────────────────────
+let statsData = null;
+let chartMode = 'hourly';
+let lstSource = '';
+let lstPage = 1;
+let lstHasMore = false;
+let favSort = 'date';
+let favorites = [];
+let theme = localStorage.getItem('cm_theme') || 'dark';
+
+// ── Theme ─────────────────────────────────────────────────────────────────────
+function applyTheme(t) {
+  document.body.classList.remove('dark','light');
+  if(t === 'dark') document.body.classList.add('dark');
+  else if(t === 'light') document.body.classList.add('light');
+  // else auto — CSS media query handles it
+  if(tg) {
+    const isDark = t === 'dark' || (t === 'auto' && window.matchMedia('(prefers-color-scheme:dark)').matches);
+    tg.setHeaderColor(isDark ? '#0D0D0F' : '#F5F5F7');
+    tg.setBackgroundColor(isDark ? '#0D0D0F' : '#F5F5F7');
+  }
 }
+function setTheme(t, btn) {
+  theme = t; localStorage.setItem('cm_theme', t);
+  document.querySelectorAll('.theme-opt').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  applyTheme(t);
+}
+applyTheme(theme);
+const thBtn = document.getElementById(`th-${theme}`);
+if(thBtn){ document.querySelectorAll('.theme-opt').forEach(b=>b.classList.remove('active')); thBtn.classList.add('active'); }
 
-// ── State ───────────────────────────────────────────────────────────────────
-let favorites = JSON.parse(localStorage.getItem('car_favorites') || '[]');
-let currentPage = 'dashboard';
-
-// ── Navigation ──────────────────────────────────────────────────────────────
-function switchPage(name) {
-  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+// ── Nav ────────────────────────────────────────────────────────────────────────
+function go(name) {
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
   document.getElementById(`page-${name}`).classList.add('active');
   document.getElementById(`nav-${name}`).classList.add('active');
-  currentPage = name;
-
-  if (name === 'dashboard') loadDashboard();
-  if (name === 'filters')   loadFilters();
-  if (name === 'favorites') loadFavorites();
+  if(name==='dashboard') loadDashboard();
+  if(name==='listings')  { lstPage=1; loadListings(true); }
+  if(name==='favorites') loadFavorites();
 }
 
-// ── Toast ───────────────────────────────────────────────────────────────────
-function showToast(msg) {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), 2500);
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function toast(msg) {
+  const t=document.getElementById('toast');
+  t.textContent=msg; t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),2500);
 }
 
-// ── Formatting ──────────────────────────────────────────────────────────────
-function fmtPrice(p) {
-  if (!p) return '—';
-  return p.toLocaleString('ru-RU') + ' ₽';
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const fmtP = v => v ? v.toLocaleString('ru-RU')+' ₽' : '—';
+const fmtM = v => v ? v.toLocaleString('ru-RU')+' км' : '';
+function timeAgo(s) {
+  const d=(Date.now()-new Date(s))/1000;
+  if(d<60) return 'только что';
+  if(d<3600) return Math.floor(d/60)+' мин';
+  if(d<86400) return Math.floor(d/3600)+' ч';
+  return Math.floor(d/86400)+' д';
 }
-function fmtMileage(m) {
-  if (!m) return '';
-  return m.toLocaleString('ru-RU') + ' км';
-}
-function timeAgo(dateStr) {
-  if (!dateStr) return '';
-  const diff = (Date.now() - new Date(dateStr)) / 1000;
-  if (diff < 60)   return 'только что';
-  if (diff < 3600) return Math.floor(diff/60) + ' мин назад';
-  if (diff < 86400) return Math.floor(diff/3600) + ' ч назад';
-  return Math.floor(diff/86400) + ' д назад';
+function srcIcon(s){ return {autoru:'🔵',avito:'🟢',drom:'🟠'}[s]||'⚪'; }
+function srcName(s){ return {autoru:'Auto.ru',avito:'Авито',drom:'Дром'}[s]||s; }
+function tr(s){ return {AUTO:'Автомат',MECHANICAL:'Механика',ROBOT:'Робот',VARIATOR:'Вариатор'}[s]||s; }
+function animN(id, target) {
+  const el=document.getElementById(id); if(!el) return;
+  const t0=performance.now(), dur=700;
+  (function step(now){
+    const p=Math.min((now-t0)/dur,1);
+    el.textContent=Math.round(target*p);
+    if(p<1) requestAnimationFrame(step);
+  })(performance.now());
 }
 
-function sourceLabel(s) {
-  return { autoru: '🔵 Auto.ru', avito: '🟢 Авито', drom: '🟠 Дром' }[s] || s;
-}
-
-// ── Dashboard ───────────────────────────────────────────────────────────────
+// ── Dashboard ─────────────────────────────────────────────────────────────────
 async function loadDashboard() {
   try {
-    const r = await fetch(`${BASE_URL}/api/stats`);
-    if (!r.ok) throw new Error();
-    const d = await r.json();
-
-    animateNum('stat-new',     d.seen_24h   || 0);
-    animateNum('stat-total',   d.seen_total || 0);
-    animateNum('stat-filters', d.active_filters || 0);
-    animateNum('stat-hour',    d.seen_1h    || 0);
-
-    document.getElementById('dash-subtitle').textContent =
-      `${d.active_filters || 0} активных фильтров · обновлено сейчас`;
-
-    // Activity
-    const al = document.getElementById('activity-list');
-    const items = d.recent_listings || [];
-    if (!items.length) {
-      al.innerHTML = '<div class="empty"><div class="empty-icon">📭</div><div class="empty-title">Пока тихо</div><div class="empty-text">Запусти парсер чтобы найти объявления</div></div>';
-    } else {
-      al.innerHTML = items.slice(0, 5).map(l => `
-        <div class="activity-item">
-          <div class="activity-icon">${l.source === 'autoru' ? '🔵' : l.source === 'avito' ? '🟢' : '🟠'}</div>
-          <div class="activity-text">
-            <div class="activity-title">${l.title || 'Авто'}</div>
-            <div class="activity-sub">${fmtPrice(l.price)} · ${l.city || ''}</div>
-          </div>
-          <div class="activity-time">${timeAgo(l.created_at)}</div>
-        </div>
-      `).join('');
-    }
+    const r = await fetch(`${BASE}/api/stats`);
+    statsData = await r.json();
+    animN('s-new',     statsData.seen_24h||0);
+    animN('s-total',   statsData.seen_total||0);
+    animN('s-filters', statsData.active_filters||0);
+    animN('s-hour',    statsData.seen_1h||0);
+    document.getElementById('dash-sub').textContent =
+      `${statsData.active_filters||0} активных фильтров`;
+    renderActivity(statsData.recent_listings||[]);
+    renderChart();
   } catch(e) {
-    document.getElementById('dash-subtitle').textContent = 'Нет связи с сервером';
-    animateNum('stat-new', 0);
-    animateNum('stat-total', 0);
-    animateNum('stat-filters', 0);
-    animateNum('stat-hour', 0);
-    document.getElementById('activity-list').innerHTML =
-      '<div class="empty"><div class="empty-icon">⚠️</div><div class="empty-title">Нет данных</div><div class="empty-text">Сервер недоступен</div></div>';
+    document.getElementById('dash-sub').textContent = 'Нет связи';
+    document.getElementById('act-list').innerHTML = '<div class="empty"><div class="empty-icon">⚠️</div><div class="empty-title">Нет данных</div></div>';
   }
 }
 
-function animateNum(id, target) {
-  const el = document.getElementById(id);
-  const start = 0, dur = 600;
-  const t0 = performance.now();
-  function step(now) {
-    const p = Math.min((now - t0) / dur, 1);
-    el.textContent = Math.round(start + (target - start) * p);
-    if (p < 1) requestAnimationFrame(step);
+function renderActivity(items) {
+  const el = document.getElementById('act-list');
+  if(!items.length){
+    el.innerHTML='<div class="empty"><div class="empty-icon">📭</div><div class="empty-title">Пока тихо</div><div class="empty-text">Запусти парсер — и здесь появятся объявления</div></div>';
+    return;
   }
-  requestAnimationFrame(step);
-}
-
-// ── Run parser ───────────────────────────────────────────────────────────────
-async function runParser() {
-  const btn = document.getElementById('run-btn');
-  btn.disabled = true;
-  btn.textContent = '⏳ Запускаем...';
-  try {
-    const r = await fetch(`${BASE_URL}/run_now`);
-    const d = await r.json();
-    showToast(`✅ Найдено новых: ${d.new_listings}`);
-    setTimeout(loadDashboard, 1000);
-  } catch(e) {
-    showToast('❌ Ошибка запуска');
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = '▶ Запустить парсер сейчас';
-  }
-}
-
-// ── Filters ──────────────────────────────────────────────────────────────────
-async function loadFilters() {
-  const list = document.getElementById('filters-list');
-  list.innerHTML = '<div class="spinner"></div>';
-  try {
-    const r = await fetch(`${BASE_URL}/api/filters`);
-    if (!r.ok) throw new Error();
-    const filters = await r.json();
-
-    document.getElementById('filters-subtitle').textContent =
-      `${filters.length} фильтр${filters.length === 1 ? '' : 'ов'}`;
-
-    if (!filters.length) {
-      list.innerHTML = '<div class="empty"><div class="empty-icon">🔍</div><div class="empty-title">Нет фильтров</div><div class="empty-text">Создай первый фильтр через бота</div></div>';
-      return;
-    }
-
-    list.innerHTML = filters.map((f, i) => `
-      <div class="filter-card">
-        <div class="filter-header" onclick="toggleFilter(${i})">
-          <div class="filter-header-left">
-            <div class="filter-status ${f.is_active ? '' : 'paused'}"></div>
-            <div>
-              <div class="filter-name">${f.name}</div>
-              <div class="filter-meta">
-                ${[f.brand, f.model].filter(Boolean).join(' ') || 'Любое авто'}
-                ${f.cities?.length ? ' · ' + f.cities.slice(0,2).join(', ') : ''}
-              </div>
-            </div>
-          </div>
-          <div class="filter-chevron" id="chev-${i}">›</div>
-        </div>
-        <div class="filter-body" id="body-${i}">
-          ${f.brand ? `<div class="filter-row"><span class="filter-row-label">Марка/Модель</span><span class="filter-row-value">${[f.brand, f.model].filter(Boolean).join(' ')}</span></div>` : ''}
-          ${(f.year_from || f.year_to) ? `<div class="filter-row"><span class="filter-row-label">Год</span><span class="filter-row-value">${f.year_from||'—'} – ${f.year_to||'—'}</span></div>` : ''}
-          ${(f.price_from || f.price_to) ? `<div class="filter-row"><span class="filter-row-label">Цена</span><span class="filter-row-value">${fmtPrice(f.price_from)} – ${fmtPrice(f.price_to)}</span></div>` : ''}
-          ${(f.mileage_from || f.mileage_to) ? `<div class="filter-row"><span class="filter-row-label">Пробег</span><span class="filter-row-value">${fmtMileage(f.mileage_from)||'—'} – ${fmtMileage(f.mileage_to)||'—'}</span></div>` : ''}
-          ${f.cities?.length ? `<div class="filter-row"><span class="filter-row-label">Города</span><span class="filter-row-value">${f.cities.join(', ')}</span></div>` : ''}
-          ${f.transmission ? `<div class="filter-row"><span class="filter-row-label">КПП</span><span class="filter-row-value">${{AUTO:'Автомат',MECHANICAL:'Механика',ROBOT:'Робот',VARIATOR:'Вариатор'}[f.transmission]||f.transmission}</span></div>` : ''}
-          <div class="filter-row"><span class="filter-row-label">Источники</span><span class="filter-row-value">${(f.sources||[]).map(s=>({autoru:'Auto.ru',avito:'Авито',drom:'Дром'}[s]||s)).join(', ')}</span></div>
-          <div class="filter-actions">
-            <button class="btn btn-primary" onclick="toggleActive(${f.id}, ${!f.is_active})">
-              ${f.is_active ? '⏸ Пауза' : '▶ Включить'}
-            </button>
-            <button class="btn btn-danger" onclick="deleteFilter(${f.id})">🗑</button>
-          </div>
-        </div>
+  el.innerHTML = items.slice(0,8).map(l=>`
+    <div class="act-item">
+      <div class="act-icon ${l.source}">${srcIcon(l.source)}</div>
+      <div class="act-body">
+        <div class="act-title">${l.title||'Авто'}</div>
+        <div class="act-sub">${fmtP(l.price)}${l.city?' · '+l.city:''}</div>
       </div>
-    `).join('');
-  } catch(e) {
-    list.innerHTML = '<div class="empty"><div class="empty-icon">⚠️</div><div class="empty-title">Ошибка загрузки</div></div>';
-  }
+      <div class="act-time">${timeAgo(l.created_at)}</div>
+    </div>
+  `).join('');
 }
 
-function toggleFilter(i) {
-  const body = document.getElementById(`body-${i}`);
-  const chev = document.getElementById(`chev-${i}`);
-  body.classList.toggle('open');
-  chev.classList.toggle('open');
+// ── Chart ──────────────────────────────────────────────────────────────────────
+function setChartMode(mode, btn) {
+  chartMode = mode;
+  document.querySelectorAll('.chart-tab').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  renderChart();
 }
 
-async function toggleActive(id, active) {
-  try {
-    await fetch(`${BASE_URL}/api/filters/${id}/toggle`, {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ active })
-    });
-    showToast(active ? '✅ Фильтр активен' : '⏸ Приостановлен');
-    loadFilters();
-  } catch { showToast('❌ Ошибка'); }
-}
+function renderChart() {
+  const canvas = document.getElementById('chart');
+  if(!canvas || !statsData) return;
+  const data = statsData[chartMode] || [];
+  const W = canvas.offsetWidth || 300;
+  const H = 120;
+  canvas.width  = W * devicePixelRatio;
+  canvas.height = H * devicePixelRatio;
+  canvas.style.width  = W+'px';
+  canvas.style.height = H+'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(devicePixelRatio, devicePixelRatio);
 
-async function deleteFilter(id) {
-  if (!confirm('Удалить фильтр?')) return;
-  try {
-    await fetch(`${BASE_URL}/api/filters/${id}`, { method: 'DELETE' });
-    showToast('🗑 Удалён');
-    loadFilters();
-  } catch { showToast('❌ Ошибка'); }
-}
-
-function openTgBot() {
-  if (tg) tg.close();
-  showToast('Создай фильтр в боте командой /filters');
-}
-
-// ── Favorites ────────────────────────────────────────────────────────────────
-function loadFavorites() {
-  const list = document.getElementById('favorites-list');
-  updateFavBadge();
-
-  if (!favorites.length) {
-    list.innerHTML = '<div class="empty"><div class="empty-icon">⭐️</div><div class="empty-title">Избранное пусто</div><div class="empty-text">Нажми ⭐️ под любым объявлением в Telegram чтобы сохранить его здесь</div></div>';
+  if(!data.length) {
+    ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text3').trim() || '#4B5563';
+    ctx.font = '13px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Нет данных', W/2, H/2);
     return;
   }
 
-  list.innerHTML = favorites.map((l, i) => `
-    <div class="listing-card">
-      <div class="listing-source">${sourceLabel(l.source)}</div>
-      <div class="listing-title">${l.title}</div>
-      <div class="listing-price">${fmtPrice(l.price)}</div>
-      <div class="listing-specs">${[l.year ? l.year+' г.' : '', fmtMileage(l.mileage), l.transmission].filter(Boolean).join(' · ')}</div>
-      ${l.city ? `<div class="listing-city">📍 ${l.city}</div>` : ''}
+  const maxV = Math.max(...data.map(d=>d.cnt), 1);
+  const pad = {t:10, r:8, b:24, l:8};
+  const cW = W - pad.l - pad.r;
+  const cH = H - pad.t - pad.b;
+  const n = data.length;
+  const barW = Math.max(2, (cW / n) - 3);
+
+  // Gradient
+  const grad = ctx.createLinearGradient(0, pad.t, 0, pad.t + cH);
+  grad.addColorStop(0,  'rgba(59,130,246,0.8)');
+  grad.addColorStop(1,  'rgba(59,130,246,0.15)');
+
+  data.forEach((d, i) => {
+    const x = pad.l + i * (cW / n);
+    const bH = Math.max(2, (d.cnt / maxV) * cH);
+    const y = pad.t + cH - bH;
+
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.roundRect(x + 1, y, barW, bH, [3,3,0,0]);
+    ctx.fill();
+  });
+
+  // Labels
+  ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text3') || '#4B5563';
+  ctx.font = `${10 * devicePixelRatio / devicePixelRatio}px sans-serif`;
+  ctx.textAlign = 'center';
+  const step = Math.max(1, Math.floor(n / 6));
+  data.forEach((d, i) => {
+    if(i % step !== 0 && i !== n-1) return;
+    const x = pad.l + i * (cW / n) + barW/2;
+    const label = chartMode === 'hourly'
+      ? new Date(d.hour).getHours() + 'ч'
+      : new Date(d.day).toLocaleDateString('ru',{month:'short',day:'numeric'});
+    ctx.fillText(label, x, H - 6);
+  });
+}
+
+// ── Run parser ────────────────────────────────────────────────────────────────
+async function runParser() {
+  const btn = document.getElementById('run-btn');
+  btn.disabled = true; btn.innerHTML = '⏳ Запускаем...';
+  try {
+    const r = await fetch(`${BASE}/run_now`);
+    const d = await r.json();
+    toast(`✅ Найдено новых: ${d.new_listings}`);
+    setTimeout(loadDashboard, 1000);
+  } catch { toast('❌ Ошибка запуска'); }
+  finally { btn.disabled=false; btn.innerHTML='▶&nbsp; Запустить парсер'; }
+}
+
+// ── Listings ──────────────────────────────────────────────────────────────────
+function setSource(src, btn) {
+  lstSource=src; lstPage=1;
+  document.querySelectorAll('.src-tab').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  loadListings(true);
+}
+
+async function loadListings(reset=false) {
+  const list = document.getElementById('lst-list');
+  if(reset){ list.innerHTML='<div class="spinner"></div>'; lstPage=1; }
+  try {
+    const url = `${BASE}/api/listings?page=${lstPage}&limit=15${lstSource?'&source='+lstSource:''}`;
+    const r = await fetch(url);
+    const d = await r.json();
+    if(reset) list.innerHTML='';
+    document.getElementById('lst-sub').textContent = `${d.total} объявлений`;
+    if(!d.items.length && reset){
+      list.innerHTML='<div class="empty"><div class="empty-icon">🔍</div><div class="empty-title">Нет объявлений</div></div>';
+      document.getElementById('lst-more').style.display='none';
+      return;
+    }
+    list.innerHTML += d.items.map(l => listingCard(l, isFav(l))).join('');
+    lstHasMore = lstPage < d.pages;
+    document.getElementById('lst-more').style.display = lstHasMore ? 'flex' : 'none';
+  } catch { list.innerHTML='<div class="empty"><div class="empty-icon">⚠️</div><div class="empty-title">Ошибка загрузки</div></div>'; }
+}
+
+function loadMoreListings() { lstPage++; loadListings(false); }
+
+function listingCard(l, faved=false) {
+  const specs = [l.year?l.year+' г.':'', fmtM(l.mileage)].filter(Boolean).join(' · ');
+  return `
+    <div class="listing-card" id="lc-${l.source}-${l.external_id}">
+      <div class="listing-src">${srcIcon(l.source)} ${srcName(l.source)}</div>
+      <div class="listing-title">${l.title||'Авто'}</div>
+      <div class="listing-price">${fmtP(l.price)}</div>
+      ${specs?`<div class="listing-specs">${specs}</div>`:''}
+      ${l.city?`<div class="listing-city">📍 ${l.city}</div>`:''}
       <div class="listing-footer">
         <a class="btn-open" href="${l.url}" target="_blank">🔗 Открыть</a>
-        <button class="btn-unfav" onclick="removeFav(${i})">🗑</button>
+        <button class="btn-fav ${faved?'active':''}"
+          onclick="toggleFav(this,'${l.source}','${l.external_id}','${(l.url||'').replace(/'/g,"\\'")}','${(l.title||'').replace(/'/g,"\\'")}',${l.price||0},${l.year||0},${l.mileage||0},'${(l.city||'').replace(/'/g,"\\'")}')">
+          ${faved?'⭐️':'☆'}
+        </button>
+      </div>
+    </div>`;
+}
+
+// ── Favorites ─────────────────────────────────────────────────────────────────
+function isFav(l) { return favorites.some(f=>f.source===l.source && f.external_id===l.external_id); }
+
+async function loadFavorites() {
+  const list = document.getElementById('fav-list');
+  list.innerHTML='<div class="spinner"></div>';
+  try {
+    const r = await fetch(`${BASE}/api/favorites`);
+    favorites = await r.json();
+    renderFavorites();
+    updateFavDot();
+  } catch {
+    list.innerHTML='<div class="empty"><div class="empty-icon">⚠️</div><div class="empty-title">Ошибка загрузки</div></div>';
+  }
+}
+
+function renderFavorites() {
+  const list = document.getElementById('fav-list');
+  document.getElementById('fav-sub').textContent = `${favorites.length} сохранено`;
+  let items = [...favorites];
+  if(favSort==='price_asc')  items.sort((a,b)=>(a.price||0)-(b.price||0));
+  if(favSort==='price_desc') items.sort((a,b)=>(b.price||0)-(a.price||0));
+  if(!items.length){
+    list.innerHTML='<div class="empty"><div class="empty-icon">⭐️</div><div class="empty-title">Избранное пусто</div><div class="empty-text">Нажми ☆ под объявлением чтобы сохранить</div></div>';
+    return;
+  }
+  list.innerHTML = items.map(l=>`
+    <div class="listing-card">
+      <div class="listing-src">${srcIcon(l.source)} ${srcName(l.source)}</div>
+      <div class="listing-title">${l.title||'Авто'}</div>
+      <div class="listing-price">${fmtP(l.price)}</div>
+      ${l.mileage?`<div class="listing-specs">${l.year?l.year+' г. · ':''}${fmtM(l.mileage)}</div>`:''}
+      ${l.city?`<div class="listing-city">📍 ${l.city}</div>`:''}
+      <div class="listing-footer">
+        <a class="btn-open" href="${l.url}" target="_blank">🔗 Открыть</a>
+        <button class="btn-fav active" onclick="removeFav('${l.source}','${l.external_id}')">⭐️</button>
       </div>
     </div>
   `).join('');
 }
 
-function removeFav(i) {
-  favorites.splice(i, 1);
-  localStorage.setItem('car_favorites', JSON.stringify(favorites));
-  showToast('Удалено из избранного');
-  loadFavorites();
+function sortFav(s, btn) {
+  favSort=s;
+  document.querySelectorAll('.fav-sort-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  renderFavorites();
 }
 
-function updateFavBadge() {
-  const badge = document.getElementById('fav-badge');
-  if (favorites.length > 0) {
-    badge.style.display = 'flex';
-    badge.textContent = favorites.length;
+async function toggleFav(btn, source, extId, url, title, price, year, mileage, city) {
+  const faved = btn.classList.contains('active');
+  if(faved) {
+    await removeFav(source, extId);
+    btn.classList.remove('active'); btn.textContent='☆';
   } else {
-    badge.style.display = 'none';
+    await addFav({source,external_id:extId,url,title,price:price||null,year:year||null,mileage:mileage||null,city:city||null});
+    btn.classList.add('active'); btn.textContent='⭐️';
   }
 }
 
-// ── Settings ─────────────────────────────────────────────────────────────────
-async function clearSeen() {
-  if (!confirm('Очистить всю историю просмотренных объявлений? Бот снова пришлёт все найденные объявления.')) return;
+async function addFav(item) {
   try {
-    await fetch(`${BASE_URL}/api/seen/clear`, { method: 'POST' });
-    showToast('✅ История очищена');
-  } catch { showToast('❌ Ошибка'); }
+    await fetch(`${BASE}/api/favorites`, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(item)
+    });
+    const r = await fetch(`${BASE}/api/favorites`);
+    favorites = await r.json();
+    updateFavDot();
+    toast('⭐️ Добавлено в избранное');
+  } catch { toast('❌ Ошибка'); }
 }
 
-// ── Init ─────────────────────────────────────────────────────────────────────
+async function removeFav(source, extId) {
+  try {
+    await fetch(`${BASE}/api/favorites/${source}/${extId}`, {method:'DELETE'});
+    favorites = favorites.filter(f=>!(f.source===source && f.external_id===extId));
+    updateFavDot();
+    renderFavorites();
+    toast('Удалено из избранного');
+  } catch { toast('❌ Ошибка'); }
+}
+
+function updateFavDot() {
+  document.getElementById('fav-dot').style.display = favorites.length ? 'block' : 'none';
+}
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+async function clearSeen() {
+  if(!confirm('Очистить всю историю просмотренных объявлений?')) return;
+  try {
+    await fetch(`${BASE}/api/seen/clear`, {method:'POST'});
+    toast('✅ История очищена');
+    loadDashboard();
+  } catch { toast('❌ Ошибка'); }
+}
+
+// ── Pull to refresh ───────────────────────────────────────────────────────────
+let ptStart=0, ptActive=false;
+document.getElementById('page-dashboard').addEventListener('touchstart', e=>{
+  if(e.touches[0].clientY < 80) ptStart=e.touches[0].clientY;
+},{passive:true});
+document.getElementById('page-dashboard').addEventListener('touchmove', e=>{
+  if(!ptStart) return;
+  const dy = e.touches[0].clientY - ptStart;
+  if(dy>50 && !ptActive){ ptActive=true; document.getElementById('ptr-dash').classList.add('show'); }
+},{passive:true});
+document.getElementById('page-dashboard').addEventListener('touchend', async ()=>{
+  if(ptActive){ await loadDashboard(); document.getElementById('ptr-dash').classList.remove('show'); ptActive=false; }
+  ptStart=0;
+},{passive:true});
+
+// ── Init ──────────────────────────────────────────────────────────────────────
 loadDashboard();
-updateFavBadge();
+loadFavorites();
 </script>
 </body>
 </html>
