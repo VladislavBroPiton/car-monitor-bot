@@ -42,6 +42,9 @@ CREATE INDEX IF NOT EXISTS idx_seen_listings_source_ext
 CREATE INDEX IF NOT EXISTS idx_seen_listings_created
     ON seen_listings (created_at);
 
+CREATE INDEX IF NOT EXISTS idx_seen_listings_url
+    ON seen_listings (url);
+
 CREATE TABLE IF NOT EXISTS favorites (
     id          SERIAL PRIMARY KEY,
     user_id     BIGINT NOT NULL,
