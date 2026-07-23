@@ -8,12 +8,14 @@ from db.repository import get_all_active_filters, cleanup_old_listings
 from parsers.base import SearchFilter
 from parsers.autoru import AutoRuParser
 from parsers.drom import DromParser
+from parsers.avito import AvitoParser
 from notifier import process_listings
 
 logger = logging.getLogger(__name__)
 
 autoru_parser = AutoRuParser()
 drom_parser = DromParser()
+avito_parser = AvitoParser()
 
 
 async def run_parsers(bot: Bot) -> dict:
