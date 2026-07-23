@@ -10,6 +10,9 @@ DATABASE_URL: str = os.environ["DATABASE_URL"]
 AUTORU_SESSION_ID: str = os.getenv("AUTORU_SESSION_ID", "")
 AUTORU_CSRF_TOKEN: str = os.getenv("AUTORU_CSRF_TOKEN", "")
 
+# ScraperAPI — для Авито и Дрома (обход блокировки US IP)
+SCRAPER_API_KEY: str = os.getenv("SCRAPER_API_KEY", "")
+
 WEBHOOK_HOST: str = os.environ["WEBHOOK_HOST"]
 WEBHOOK_PATH: str = "/webhook"
 WEBHOOK_SECRET: str = os.getenv("WEBHOOK_SECRET", "supersecret")
