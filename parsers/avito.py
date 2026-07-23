@@ -11,15 +11,17 @@ from parsers.base import BaseParser, Listing, SearchFilter
 logger = logging.getLogger(__name__)
 
 # Маппинг городов Авито (slug в URL)
+# Авито использует регионы, а не отдельные города для малых городов
+# Волгоградская область = volgograd_oblast для всех городов региона
 CITY_SLUG = {
     "Волгоград":            "volgograd",
-    "Волжский":             "volzhskiy",
-    "Камышин":              "kamyshin",
-    "Михайловка":           "mihaylovka",
-    "Урюпинск":             "urupinsk",
-    "Фролово":              "frolovo",
-    "Калач-на-Дону":        "kalach-na-donu",
-    "Николаевск":           "nikolaevsk",
+    "Волжский":             "volgograd_oblast/volzhskiy",
+    "Камышин":              "volgograd_oblast/kamyshin",
+    "Михайловка":           "volgograd_oblast/mihaylovka",
+    "Урюпинск":             "volgograd_oblast/urupinsk",
+    "Фролово":              "volgograd_oblast/frolovo",
+    "Калач-на-Дону":        "volgograd_oblast/kalach-na-donu",
+    "Николаевск":           "volgograd_oblast/nikolaevsk",
     "Москва":               "moskva",
     "Санкт-Петербург":      "sankt-peterburg",
     "Краснодар":            "krasnodar",
