@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Car Monitor</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #0D0D0F;
+    --bg2:       #161618;
+    --bg3:       #1E1E22;
+    --border:    rgba(255,255,255,0.08);
+    --accent:    #3B82F6;
+    --accent2:   #60A5FA;
+    --green:     #22C55E;
+    --orange:    #F59E0B;
+    --red:       #EF4444;
+    --text:      #E8E8F0;
+    --text2:     #9CA3AF;
+    --text3:     #4B5563;
+    --radius:    14px;
+    --radius-sm: 8px;
+  }
+
+  html, body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, 'Inter', 'Segoe UI', sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── Layout ── */
+  #app { display: flex; flex-direction: column; min-height: 100vh; }
+  .page { flex: 1; padding: 0 0 80px; display: none; }
+  .page.active { display: block; }
+
+  /* ── Header ── */
+  .header {
+    position: sticky; top: 0; z-index: 10;
+    background: rgba(13,13,15,0.92);
+    backdrop-filter: blur(12px);
+    padding: 16px 20px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .header h1 { font-size: 20px; font-weight: 700; letter-spacing: -0.3px; }
+  .header p  { font-size: 13px; color: var(--text2); margin-top: 2px; }
+
+  /* ── Bottom nav ── */
+  .nav {
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 20;
+    display: flex;
+    background: rgba(22,22,24,0.96);
+    backdrop-filter: blur(16px);
+    border-top: 1px solid var(--border);
+    padding-bottom: env(safe-area-inset-bottom, 0);
+  }
+  .nav-item {
+    flex: 1; display: flex; flex-direction: column; align-items: center;
+    padding: 10px 4px;
+    cursor: pointer; border: none; background: none;
+    color: var(--text3); font-size: 10px; font-weight: 500;
+    transition: color .15s;
+    gap: 4px;
+  }
+  .nav-item svg { width: 22px; height: 22px; }
+  .nav-item.active { color: var(--accent); }
+  .nav-badge {
+    position: absolute; top: 6px; right: calc(50% - 18px);
+    background: var(--red); color: #fff;
+    font-size: 9px; font-weight: 700;
+    min-width: 16px; height: 16px;
+    border-radius: 8px; padding: 0 4px;
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin: 12px 16px 0;
+  }
+  .card-title {
+    font-size: 12px; font-weight: 600;
+    color: var(--text2); text-transform: uppercase;
+    letter-spacing: 0.6px; margin-bottom: 12px;
+  }
+
+  /* ── Dashboard ── */
+  .stats-grid {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 10px; padding: 16px 16px 0;
+  }
+  .stat-box {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .stat-num {
+    font-size: 28px; font-weight: 800;
+    letter-spacing: -1px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .stat-num.green { background: linear-gradient(135deg, #22C55E, #4ADE80); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .stat-num.orange { background: linear-gradient(135deg, #F59E0B, #FCD34D); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .stat-label { font-size: 12px; color: var(--text2); }
+
+  .sources-row {
+    display: flex; gap: 8px; flex-wrap: wrap; padding: 12px 16px 0;
+  }
+  .source-chip {
+    display: flex; align-items: center; gap: 6px;
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 20px; padding: 6px 12px;
+    font-size: 13px;
+  }
+  .source-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+  }
+
+  /* ── Activity feed ── */
+  .activity-item {
+    display: flex; align-items: flex-start; gap: 12px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .activity-item:last-child { border-bottom: none; }
+  .activity-icon {
+    width: 36px; height: 36px; border-radius: 50%;
+    background: rgba(59,130,246,0.15);
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0; font-size: 16px;
+  }
+  .activity-text { flex: 1; }
+  .activity-title { font-size: 14px; font-weight: 500; }
+  .activity-sub { font-size: 12px; color: var(--text2); margin-top: 2px; }
+  .activity-time { font-size: 11px; color: var(--text3); flex-shrink: 0; }
+
+  /* ── Filters ── */
+  .filter-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin: 12px 16px 0;
+    overflow: hidden;
+  }
+  .filter-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 16px;
+    cursor: pointer;
+  }
+  .filter-header-left { display: flex; align-items: center; gap: 10px; }
+  .filter-status {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--green);
+    flex-shrink: 0;
+  }
+  .filter-status.paused { background: var(--text3); }
+  .filter-name { font-size: 15px; font-weight: 600; }
+  .filter-meta { font-size: 12px; color: var(--text2); margin-top: 1px; }
+  .filter-chevron {
+    color: var(--text3); font-size: 18px;
+    transition: transform .2s;
+  }
+  .filter-chevron.open { transform: rotate(180deg); }
+  .filter-body {
+    display: none; padding: 0 16px 16px;
+    border-top: 1px solid var(--border);
+  }
+  .filter-body.open { display: block; }
+  .filter-row {
+    display: flex; justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .filter-row:last-child { border-bottom: none; }
+  .filter-row-label { color: var(--text2); }
+  .filter-row-value { font-weight: 500; text-align: right; max-width: 60%; }
+  .filter-actions {
+    display: flex; gap: 8px; margin-top: 14px;
+  }
+  .btn {
+    border: none; border-radius: var(--radius-sm);
+    padding: 8px 14px; font-size: 13px; font-weight: 600;
+    cursor: pointer; transition: opacity .15s;
+  }
+  .btn:active { opacity: 0.7; }
+  .btn-primary { background: var(--accent); color: #fff; flex: 1; }
+  .btn-danger  { background: rgba(239,68,68,0.15); color: var(--red); }
+  .btn-neutral { background: var(--bg3); color: var(--text2); }
+
+  .add-filter-btn {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    width: calc(100% - 32px); margin: 12px 16px 0;
+    padding: 14px; border-radius: var(--radius);
+    background: rgba(59,130,246,0.1);
+    border: 1px dashed rgba(59,130,246,0.4);
+    color: var(--accent); font-size: 14px; font-weight: 600;
+    cursor: pointer; transition: background .15s;
+  }
+  .add-filter-btn:active { background: rgba(59,130,246,0.2); }
+
+  /* ── Listings ── */
+  .listing-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin: 10px 16px 0;
+    padding: 14px;
+    position: relative;
+  }
+  .listing-source {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; font-weight: 600; color: var(--accent2);
+    margin-bottom: 6px;
+  }
+  .listing-title { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+  .listing-price {
+    font-size: 20px; font-weight: 800; letter-spacing: -0.5px;
+    color: var(--text); margin-bottom: 6px;
+  }
+  .listing-specs { font-size: 12px; color: var(--text2); }
+  .listing-city { font-size: 12px; color: var(--text2); margin-top: 2px; }
+  .listing-footer {
+    display: flex; gap: 8px; margin-top: 12px;
+  }
+  .btn-open {
+    flex: 1; background: var(--accent); color: #fff;
+    border: none; border-radius: var(--radius-sm);
+    padding: 9px; font-size: 13px; font-weight: 600;
+    cursor: pointer; text-decoration: none;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .btn-unfav {
+    background: var(--bg3); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 9px 12px;
+    font-size: 13px; cursor: pointer; border: none;
+  }
+
+  /* ── Empty state ── */
+  .empty {
+    display: flex; flex-direction: column; align-items: center;
+    padding: 48px 32px; text-align: center; gap: 12px;
+  }
+  .empty-icon { font-size: 48px; opacity: 0.4; }
+  .empty-title { font-size: 17px; font-weight: 600; }
+  .empty-text { font-size: 13px; color: var(--text2); line-height: 1.6; }
+
+  /* ── Loading ── */
+  .spinner {
+    width: 32px; height: 32px; border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%; animation: spin .6s linear infinite;
+    margin: 40px auto;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Toast ── */
+  .toast {
+    position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%);
+    background: var(--bg3); border: 1px solid var(--border);
+    border-radius: 20px; padding: 10px 20px;
+    font-size: 13px; font-weight: 500;
+    opacity: 0; transition: opacity .2s;
+    pointer-events: none; white-space: nowrap; z-index: 100;
+  }
+  .toast.show { opacity: 1; }
+
+  /* ── Chip tags ── */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chip {
+    background: var(--bg3); border: 1px solid var(--border);
+    border-radius: 12px; padding: 4px 10px;
+    font-size: 11px; color: var(--text2);
+  }
+
+  /* ── Section padding ── */
+  .section-pad { padding: 16px 16px 0; }
+
+  /* ── Run button ── */
+  .run-btn {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    width: calc(100% - 32px); margin: 12px 16px 0;
+    padding: 14px; border-radius: var(--radius);
+    background: linear-gradient(135deg, var(--accent), #2563EB);
+    border: none; color: #fff; font-size: 15px; font-weight: 700;
+    cursor: pointer; transition: opacity .15s;
+    box-shadow: 0 4px 20px rgba(59,130,246,0.3);
+  }
+  .run-btn:active { opacity: 0.8; }
+  .run-btn:disabled { opacity: 0.5; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ── DASHBOARD ── -->
+  <div class="page active" id="page-dashboard">
+    <div class="header">
+      <h1>🚗 Car Monitor</h1>
+      <p id="dash-subtitle">Загрузка...</p>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-box">
+        <div class="stat-num green" id="stat-new">—</div>
+        <div class="stat-label">За сутки</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-num" id="stat-total">—</div>
+        <div class="stat-label">Всего просмотрено</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-num orange" id="stat-filters">—</div>
+        <div class="stat-label">Активных фильтров</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-num" id="stat-hour">—</div>
+        <div class="stat-label">За час</div>
+      </div>
+    </div>
+
+    <div class="sources-row">
+      <div class="source-chip">
+        <div class="source-dot" style="background:#3B82F6"></div>
+        Auto.ru
+      </div>
+      <div class="source-chip">
+        <div class="source-dot" style="background:#22C55E"></div>
+        Авито
+      </div>
+      <div class="source-chip">
+        <div class="source-dot" style="background:#6B7280"></div>
+        Дром (скоро)
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Последняя активность</div>
+      <div id="activity-list">
+        <div class="spinner"></div>
+      </div>
+    </div>
+
+    <button class="run-btn" id="run-btn" onclick="runParser()">
+      ▶ Запустить парсер сейчас
+    </button>
+  </div>
+
+  <!-- ── FILTERS ── -->
+  <div class="page" id="page-filters">
+    <div class="header">
+      <h1>Фильтры</h1>
+      <p id="filters-subtitle">Загрузка...</p>
+    </div>
+    <div id="filters-list"></div>
+    <button class="add-filter-btn" onclick="openTgBot()">
+      + Создать фильтр
+    </button>
+  </div>
+
+  <!-- ── FAVORITES ── -->
+  <div class="page" id="page-favorites">
+    <div class="header">
+      <h1>Избранное</h1>
+      <p id="fav-subtitle">Сохранённые объявления</p>
+    </div>
+    <div id="favorites-list"></div>
+  </div>
+
+  <!-- ── SETTINGS ── -->
+  <div class="page" id="page-settings">
+    <div class="header">
+      <h1>Настройки</h1>
+      <p>Управление ботом</p>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Источники</div>
+      <div class="activity-item">
+        <div class="activity-icon">🔵</div>
+        <div class="activity-text">
+          <div class="activity-title">Auto.ru</div>
+          <div class="activity-sub">Работает · Cookies активны</div>
+        </div>
+        <div style="color:var(--green);font-size:12px;font-weight:600">ОК</div>
+      </div>
+      <div class="activity-item">
+        <div class="activity-icon">🟢</div>
+        <div class="activity-text">
+          <div class="activity-title">Авито</div>
+          <div class="activity-sub">Работает · через ScraperAPI</div>
+        </div>
+        <div style="color:var(--green);font-size:12px;font-weight:600">ОК</div>
+      </div>
+      <div class="activity-item">
+        <div class="activity-icon">🟠</div>
+        <div class="activity-text">
+          <div class="activity-title">Дром</div>
+          <div class="activity-sub">Заблокирован US IP · Нужен RU прокси</div>
+        </div>
+        <div style="color:var(--red);font-size:12px;font-weight:600">⚠️</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Расписание</div>
+      <div class="activity-item">
+        <div class="activity-icon">⏱</div>
+        <div class="activity-text">
+          <div class="activity-title">Cron-job.org</div>
+          <div class="activity-sub">Каждые 14 минут</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Опасная зона</div>
+      <button class="btn btn-danger" style="width:100%;padding:12px;font-size:14px" onclick="clearSeen()">
+        🗑 Очистить историю просмотренных
+      </button>
+    </div>
+  </div>
+
+  <!-- ── Bottom nav ── -->
+  <nav class="nav">
+    <button class="nav-item active" id="nav-dashboard" onclick="switchPage('dashboard')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>
+        <rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>
+      </svg>
+      Дашборд
+    </button>
+    <button class="nav-item" id="nav-filters" onclick="switchPage('filters')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="4" y1="6" x2="20" y2="6"/><line x1="8" y1="12" x2="16" y2="12"/>
+        <line x1="10" y1="18" x2="14" y2="18"/>
+      </svg>
+      Фильтры
+    </button>
+    <button class="nav-item" id="nav-favorites" onclick="switchPage('favorites')" style="position:relative">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+      </svg>
+      Избранное
+      <span class="nav-badge" id="fav-badge" style="display:none">0</span>
+    </button>
+    <button class="nav-item" id="nav-settings" onclick="switchPage('settings')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+      Настройки
+    </button>
+  </nav>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ── Config ──────────────────────────────────────────────────────────────────
+const BASE_URL = 'https://car-monitor-bot-oov7.onrender.com';
+
+// ── Telegram WebApp ──────────────────────────────────────────────────────────
+const tg = window.Telegram?.WebApp;
+if (tg) {
+  tg.ready();
+  tg.expand();
+  tg.setHeaderColor('#0D0D0F');
+  tg.setBackgroundColor('#0D0D0F');
+}
+
+// ── State ───────────────────────────────────────────────────────────────────
+let favorites = JSON.parse(localStorage.getItem('car_favorites') || '[]');
+let currentPage = 'dashboard';
+
+// ── Navigation ──────────────────────────────────────────────────────────────
+function switchPage(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById(`page-${name}`).classList.add('active');
+  document.getElementById(`nav-${name}`).classList.add('active');
+  currentPage = name;
+
+  if (name === 'dashboard') loadDashboard();
+  if (name === 'filters')   loadFilters();
+  if (name === 'favorites') loadFavorites();
+}
+
+// ── Toast ───────────────────────────────────────────────────────────────────
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+// ── Formatting ──────────────────────────────────────────────────────────────
+function fmtPrice(p) {
+  if (!p) return '—';
+  return p.toLocaleString('ru-RU') + ' ₽';
+}
+function fmtMileage(m) {
+  if (!m) return '';
+  return m.toLocaleString('ru-RU') + ' км';
+}
+function timeAgo(dateStr) {
+  if (!dateStr) return '';
+  const diff = (Date.now() - new Date(dateStr)) / 1000;
+  if (diff < 60)   return 'только что';
+  if (diff < 3600) return Math.floor(diff/60) + ' мин назад';
+  if (diff < 86400) return Math.floor(diff/3600) + ' ч назад';
+  return Math.floor(diff/86400) + ' д назад';
+}
+
+function sourceLabel(s) {
+  return { autoru: '🔵 Auto.ru', avito: '🟢 Авито', drom: '🟠 Дром' }[s] || s;
+}
+
+// ── Dashboard ───────────────────────────────────────────────────────────────
+async function loadDashboard() {
+  try {
+    const r = await fetch(`${BASE_URL}/api/stats`);
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+
+    animateNum('stat-new',     d.seen_24h   || 0);
+    animateNum('stat-total',   d.seen_total || 0);
+    animateNum('stat-filters', d.active_filters || 0);
+    animateNum('stat-hour',    d.seen_1h    || 0);
+
+    document.getElementById('dash-subtitle').textContent =
+      `${d.active_filters || 0} активных фильтров · обновлено сейчас`;
+
+    // Activity
+    const al = document.getElementById('activity-list');
+    const items = d.recent_listings || [];
+    if (!items.length) {
+      al.innerHTML = '<div class="empty"><div class="empty-icon">📭</div><div class="empty-title">Пока тихо</div><div class="empty-text">Запусти парсер чтобы найти объявления</div></div>';
+    } else {
+      al.innerHTML = items.slice(0, 5).map(l => `
+        <div class="activity-item">
+          <div class="activity-icon">${l.source === 'autoru' ? '🔵' : l.source === 'avito' ? '🟢' : '🟠'}</div>
+          <div class="activity-text">
+            <div class="activity-title">${l.title || 'Авто'}</div>
+            <div class="activity-sub">${fmtPrice(l.price)} · ${l.city || ''}</div>
+          </div>
+          <div class="activity-time">${timeAgo(l.created_at)}</div>
+        </div>
+      `).join('');
+    }
+  } catch(e) {
+    document.getElementById('dash-subtitle').textContent = 'Нет связи с сервером';
+    animateNum('stat-new', 0);
+    animateNum('stat-total', 0);
+    animateNum('stat-filters', 0);
+    animateNum('stat-hour', 0);
+    document.getElementById('activity-list').innerHTML =
+      '<div class="empty"><div class="empty-icon">⚠️</div><div class="empty-title">Нет данных</div><div class="empty-text">Сервер недоступен</div></div>';
+  }
+}
+
+function animateNum(id, target) {
+  const el = document.getElementById(id);
+  const start = 0, dur = 600;
+  const t0 = performance.now();
+  function step(now) {
+    const p = Math.min((now - t0) / dur, 1);
+    el.textContent = Math.round(start + (target - start) * p);
+    if (p < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+// ── Run parser ───────────────────────────────────────────────────────────────
+async function runParser() {
+  const btn = document.getElementById('run-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Запускаем...';
+  try {
+    const r = await fetch(`${BASE_URL}/run_now`);
+    const d = await r.json();
+    showToast(`✅ Найдено новых: ${d.new_listings}`);
+    setTimeout(loadDashboard, 1000);
+  } catch(e) {
+    showToast('❌ Ошибка запуска');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '▶ Запустить парсер сейчас';
+  }
+}
+
+// ── Filters ──────────────────────────────────────────────────────────────────
+async function loadFilters() {
+  const list = document.getElementById('filters-list');
+  list.innerHTML = '<div class="spinner"></div>';
+  try {
+    const r = await fetch(`${BASE_URL}/api/filters`);
+    if (!r.ok) throw new Error();
+    const filters = await r.json();
+
+    document.getElementById('filters-subtitle').textContent =
+      `${filters.length} фильтр${filters.length === 1 ? '' : 'ов'}`;
+
+    if (!filters.length) {
+      list.innerHTML = '<div class="empty"><div class="empty-icon">🔍</div><div class="empty-title">Нет фильтров</div><div class="empty-text">Создай первый фильтр через бота</div></div>';
+      return;
+    }
+
+    list.innerHTML = filters.map((f, i) => `
+      <div class="filter-card">
+        <div class="filter-header" onclick="toggleFilter(${i})">
+          <div class="filter-header-left">
+            <div class="filter-status ${f.is_active ? '' : 'paused'}"></div>
+            <div>
+              <div class="filter-name">${f.name}</div>
+              <div class="filter-meta">
+                ${[f.brand, f.model].filter(Boolean).join(' ') || 'Любое авто'}
+                ${f.cities?.length ? ' · ' + f.cities.slice(0,2).join(', ') : ''}
+              </div>
+            </div>
+          </div>
+          <div class="filter-chevron" id="chev-${i}">›</div>
+        </div>
+        <div class="filter-body" id="body-${i}">
+          ${f.brand ? `<div class="filter-row"><span class="filter-row-label">Марка/Модель</span><span class="filter-row-value">${[f.brand, f.model].filter(Boolean).join(' ')}</span></div>` : ''}
+          ${(f.year_from || f.year_to) ? `<div class="filter-row"><span class="filter-row-label">Год</span><span class="filter-row-value">${f.year_from||'—'} – ${f.year_to||'—'}</span></div>` : ''}
+          ${(f.price_from || f.price_to) ? `<div class="filter-row"><span class="filter-row-label">Цена</span><span class="filter-row-value">${fmtPrice(f.price_from)} – ${fmtPrice(f.price_to)}</span></div>` : ''}
+          ${(f.mileage_from || f.mileage_to) ? `<div class="filter-row"><span class="filter-row-label">Пробег</span><span class="filter-row-value">${fmtMileage(f.mileage_from)||'—'} – ${fmtMileage(f.mileage_to)||'—'}</span></div>` : ''}
+          ${f.cities?.length ? `<div class="filter-row"><span class="filter-row-label">Города</span><span class="filter-row-value">${f.cities.join(', ')}</span></div>` : ''}
+          ${f.transmission ? `<div class="filter-row"><span class="filter-row-label">КПП</span><span class="filter-row-value">${{AUTO:'Автомат',MECHANICAL:'Механика',ROBOT:'Робот',VARIATOR:'Вариатор'}[f.transmission]||f.transmission}</span></div>` : ''}
+          <div class="filter-row"><span class="filter-row-label">Источники</span><span class="filter-row-value">${(f.sources||[]).map(s=>({autoru:'Auto.ru',avito:'Авито',drom:'Дром'}[s]||s)).join(', ')}</span></div>
+          <div class="filter-actions">
+            <button class="btn btn-primary" onclick="toggleActive(${f.id}, ${!f.is_active})">
+              ${f.is_active ? '⏸ Пауза' : '▶ Включить'}
+            </button>
+            <button class="btn btn-danger" onclick="deleteFilter(${f.id})">🗑</button>
+          </div>
+        </div>
+      </div>
+    `).join('');
+  } catch(e) {
+    list.innerHTML = '<div class="empty"><div class="empty-icon">⚠️</div><div class="empty-title">Ошибка загрузки</div></div>';
+  }
+}
+
+function toggleFilter(i) {
+  const body = document.getElementById(`body-${i}`);
+  const chev = document.getElementById(`chev-${i}`);
+  body.classList.toggle('open');
+  chev.classList.toggle('open');
+}
+
+async function toggleActive(id, active) {
+  try {
+    await fetch(`${BASE_URL}/api/filters/${id}/toggle`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ active })
+    });
+    showToast(active ? '✅ Фильтр активен' : '⏸ Приостановлен');
+    loadFilters();
+  } catch { showToast('❌ Ошибка'); }
+}
+
+async function deleteFilter(id) {
+  if (!confirm('Удалить фильтр?')) return;
+  try {
+    await fetch(`${BASE_URL}/api/filters/${id}`, { method: 'DELETE' });
+    showToast('🗑 Удалён');
+    loadFilters();
+  } catch { showToast('❌ Ошибка'); }
+}
+
+function openTgBot() {
+  if (tg) tg.close();
+  showToast('Создай фильтр в боте командой /filters');
+}
+
+// ── Favorites ────────────────────────────────────────────────────────────────
+function loadFavorites() {
+  const list = document.getElementById('favorites-list');
+  updateFavBadge();
+
+  if (!favorites.length) {
+    list.innerHTML = '<div class="empty"><div class="empty-icon">⭐️</div><div class="empty-title">Избранное пусто</div><div class="empty-text">Нажми ⭐️ под любым объявлением в Telegram чтобы сохранить его здесь</div></div>';
+    return;
+  }
+
+  list.innerHTML = favorites.map((l, i) => `
+    <div class="listing-card">
+      <div class="listing-source">${sourceLabel(l.source)}</div>
+      <div class="listing-title">${l.title}</div>
+      <div class="listing-price">${fmtPrice(l.price)}</div>
+      <div class="listing-specs">${[l.year ? l.year+' г.' : '', fmtMileage(l.mileage), l.transmission].filter(Boolean).join(' · ')}</div>
+      ${l.city ? `<div class="listing-city">📍 ${l.city}</div>` : ''}
+      <div class="listing-footer">
+        <a class="btn-open" href="${l.url}" target="_blank">🔗 Открыть</a>
+        <button class="btn-unfav" onclick="removeFav(${i})">🗑</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function removeFav(i) {
+  favorites.splice(i, 1);
+  localStorage.setItem('car_favorites', JSON.stringify(favorites));
+  showToast('Удалено из избранного');
+  loadFavorites();
+}
+
+function updateFavBadge() {
+  const badge = document.getElementById('fav-badge');
+  if (favorites.length > 0) {
+    badge.style.display = 'flex';
+    badge.textContent = favorites.length;
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+// ── Settings ─────────────────────────────────────────────────────────────────
+async function clearSeen() {
+  if (!confirm('Очистить всю историю просмотренных объявлений? Бот снова пришлёт все найденные объявления.')) return;
+  try {
+    await fetch(`${BASE_URL}/api/seen/clear`, { method: 'POST' });
+    showToast('✅ История очищена');
+  } catch { showToast('❌ Ошибка'); }
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+loadDashboard();
+updateFavBadge();
+</script>
+</body>
+</html>
