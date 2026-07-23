@@ -79,7 +79,7 @@ BRAND_SLUG = {
 
 # Авито поддерживает многостраничную загрузку — берём больше страниц
 # чтобы найти нужные объявления среди всех авто города
-MAX_PAGES = 3
+MAX_PAGES = 2
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
