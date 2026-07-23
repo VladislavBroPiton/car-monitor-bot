@@ -55,13 +55,39 @@ def create_app() -> FastAPI:
     # Mini App API + статика
     app.include_router(miniapp_router)
 
-    # Раздаём HTML файл Mini App
+    # Раздаём Mini App — данные встроены прямо в HTML (SSR)
     from fastapi.responses import HTMLResponse
     from pathlib import Path
+    import json as _json
 
     @app.get("/miniapp", response_class=HTMLResponse)
     async def serve_miniapp():
         html = Path("miniapp/index.html").read_text(encoding="utf-8")
+
+        # Загружаем данные на сервере и встраиваем в HTML
+        try:
+            pool = await get_pool()
+            seen_total     = await pool.fetchval("SELECT COUNT(*) FROM seen_listings")
+            seen_24h       = await pool.fetchval("SELECT COUNT(*) FROM seen_listings WHERE created_at > NOW() - INTERVAL '24 hours'")
+            seen_1h        = await pool.fetchval("SELECT COUNT(*) FROM seen_listings WHERE created_at > NOW() - INTERVAL '1 hour'")
+            active_filters = await pool.fetchval("SELECT COUNT(*) FROM filters WHERE is_active=TRUE")
+            recent = await pool.fetch("SELECT source, title, price, city, created_at FROM seen_listings ORDER BY created_at DESC LIMIT 10")
+            hourly = await pool.fetch("SELECT DATE_TRUNC('hour', created_at) as hour, COUNT(*) as cnt FROM seen_listings WHERE created_at > NOW() - INTERVAL '24 hours' GROUP BY hour ORDER BY hour")
+            daily  = await pool.fetch("SELECT DATE_TRUNC('day', created_at) as day, COUNT(*) as cnt FROM seen_listings WHERE created_at > NOW() - INTERVAL '7 days' GROUP BY day ORDER BY day")
+
+            ssr_data = {
+                "seen_total": seen_total, "seen_24h": seen_24h,
+                "seen_1h": seen_1h, "active_filters": active_filters,
+                "recent_listings": [{"source":r["source"],"title":r["title"],"price":r["price"],"city":r["city"],"created_at":str(r["created_at"])} for r in recent],
+                "hourly": [{"hour":str(r["hour"]),"cnt":r["cnt"]} for r in hourly],
+                "daily":  [{"day":str(r["day"]),"cnt":r["cnt"]}  for r in daily],
+            }
+        except Exception as e:
+            ssr_data = {"seen_total":0,"seen_24h":0,"seen_1h":0,"active_filters":0,"recent_listings":[],"hourly":[],"daily":[]}
+
+        # Встраиваем данные перед закрывающим </script>
+        ssr_script = f"<script>window.__SSR__ = {_json.dumps(ssr_data, ensure_ascii=False)};</script>"
+        html = html.replace("</head>", ssr_script + "</head>", 1)
         return HTMLResponse(content=html)
 
     @app.post(WEBHOOK_PATH)
