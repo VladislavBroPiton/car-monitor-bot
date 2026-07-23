@@ -41,3 +41,22 @@ CREATE INDEX IF NOT EXISTS idx_seen_listings_source_ext
 
 CREATE INDEX IF NOT EXISTS idx_seen_listings_created
     ON seen_listings (created_at);
+
+CREATE TABLE IF NOT EXISTS favorites (
+    id          SERIAL PRIMARY KEY,
+    user_id     BIGINT NOT NULL,
+    source      TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    url         TEXT NOT NULL,
+    title       TEXT,
+    price       INTEGER,
+    year        INTEGER,
+    mileage     INTEGER,
+    city        TEXT,
+    filter_name TEXT,
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (user_id, source, external_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_favorites_user
+    ON favorites (user_id, created_at DESC);
