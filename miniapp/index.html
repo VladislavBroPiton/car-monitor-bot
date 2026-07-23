@@ -487,8 +487,16 @@ function animN(id, target) {
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 async function loadDashboard() {
   try {
-    const r = await fetch(`${BASE}/api/stats`);
-    statsData = await r.json();
+    // Используем SSR данные если они есть (Telegram WebView блокирует fetch)
+    let data;
+    if(window.__SSR__) {
+      data = window.__SSR__;
+      window.__SSR__ = null; // используем только первый раз, потом fetch
+    } else {
+      const r = await fetch(`${BASE}/api/stats`);
+      data = await r.json();
+    }
+    statsData = data;
     animN('s-new',     statsData.seen_24h||0);
     animN('s-total',   statsData.seen_total||0);
     animN('s-filters', statsData.active_filters||0);
@@ -657,8 +665,12 @@ async function loadFavorites() {
   const list = document.getElementById('fav-list');
   list.innerHTML='<div class="spinner"></div>';
   try {
-    const r = await fetch(`${BASE}/api/favorites`);
-    favorites = await r.json();
+    let data;
+    try {
+      const r = await fetch(`${BASE}/api/favorites`);
+      data = await r.json();
+    } catch { data = []; }
+    favorites = data;
     renderFavorites();
     updateFavDot();
   } catch {
