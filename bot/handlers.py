@@ -96,6 +96,7 @@ BODY_LABELS = {
 SOURCE_LABELS = {
     "autoru": "🔵 Auto.ru",
     "drom":   "🟠 Дром",
+    "avito":  "🟢 Авито",
 }
 
 CATALOG: dict[str, list[str]] = {
@@ -674,11 +675,12 @@ async def cb_edit_field(call: CallbackQuery, state: FSMContext):
         await call.message.edit_text(
             "📡 Выбери источники:",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔵+🟠 Оба", callback_data="edit_val:both")],
+                [InlineKeyboardButton(text="🔵+🟠+🟢 Все три", callback_data="edit_val:all")],
                 [
                     InlineKeyboardButton(text="🔵 Auto.ru", callback_data="edit_val:autoru"),
-                    InlineKeyboardButton(text="🟠 Дром",    callback_data="edit_val:drom"),
+                    InlineKeyboardButton(text="🟢 Авито",   callback_data="edit_val:avito"),
                 ],
+                [InlineKeyboardButton(text="🟠 Дром",       callback_data="edit_val:drom")],
                 [InlineKeyboardButton(text="◀️ Отмена", callback_data=f"filter_edit:{filter_id}")],
             ]),
         )
@@ -726,7 +728,13 @@ async def cb_edit_val(call: CallbackQuery, state: FSMContext):
     if val_raw == "NONE":
         value = None
     elif field == "sources":
-        value = {"both": ["autoru", "drom"], "autoru": ["autoru"], "drom": ["drom"]}[val_raw]
+        value = {
+            "all":    ["autoru", "drom", "avito"],
+            "both":   ["autoru", "drom"],
+            "autoru": ["autoru"],
+            "drom":   ["drom"],
+            "avito":  ["avito"],
+        }[val_raw]
     elif field == "brand":
         value = val_raw if val_raw != "-" else None
         # Сбрасываем модель при смене марки
@@ -1171,11 +1179,12 @@ async def cb_fsm_body(call: CallbackQuery, state: FSMContext):
         _step(13, 13, "Шаг 13 — Источники", "Где искать?"),
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔵+🟠 Оба сайта", callback_data="fsm_src:both")],
+            [InlineKeyboardButton(text="🔵+🟠+🟢 Все три", callback_data="fsm_src:all")],
             [
                 InlineKeyboardButton(text="🔵 Auto.ru", callback_data="fsm_src:autoru"),
-                InlineKeyboardButton(text="🟠 Дром",    callback_data="fsm_src:drom"),
+                InlineKeyboardButton(text="🟢 Авито",   callback_data="fsm_src:avito"),
             ],
+            [InlineKeyboardButton(text="🟠 Дром",       callback_data="fsm_src:drom")],
         ]),
     )
     await call.answer()
@@ -1194,7 +1203,13 @@ async def fsm_body_text(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("fsm_src:"))
 async def cb_fsm_sources(call: CallbackQuery, state: FSMContext):
     val = call.data.split(":")[1]
-    sources = {"autoru": ["autoru"], "drom": ["drom"], "both": ["autoru", "drom"]}[val]
+    sources = {
+        "autoru": ["autoru"],
+        "drom":   ["drom"],
+        "avito":  ["avito"],
+        "both":   ["autoru", "drom"],
+        "all":    ["autoru", "drom", "avito"],
+    }[val]
     await _finish_filter(call.message, state, sources, from_call=True)
     await call.answer()
 
