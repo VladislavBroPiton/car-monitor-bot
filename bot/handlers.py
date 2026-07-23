@@ -11,7 +11,7 @@ from aiogram.types import (
     InlineKeyboardButton,
 )
 
-from config import OWNER_ID
+from config import OWNER_ID, WEBHOOK_HOST
 from db.repository import (
     get_active_filters,
     get_filter_by_id,
@@ -158,6 +158,10 @@ REGION_CITIES: dict[str, list[str]] = {
 
 def _main_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="🚀 Открыть Mini App",
+            web_app={"url": f"{WEBHOOK_HOST}/miniapp"}
+        )],
         [InlineKeyboardButton(text="📋 Мои фильтры",   callback_data="filters_list:0")],
         [InlineKeyboardButton(text="➕ Новый фильтр",  callback_data="filter_add")],
         [InlineKeyboardButton(text="📊 Статистика",    callback_data="show_status")],

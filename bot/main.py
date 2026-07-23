@@ -21,6 +21,7 @@ from config import (
 )
 from bot.handlers import router as handlers_router
 from scheduler import create_scheduler_router
+from miniapp_api import router as miniapp_router
 from db.repository import get_pool, close_pool
 
 logging.basicConfig(
@@ -50,6 +51,18 @@ def create_app() -> FastAPI:
 
     scheduler_router = create_scheduler_router(bot)
     app.include_router(scheduler_router)
+
+    # Mini App API + статика
+    app.include_router(miniapp_router)
+
+    # Раздаём HTML файл Mini App
+    from fastapi.responses import HTMLResponse
+    from pathlib import Path
+
+    @app.get("/miniapp", response_class=HTMLResponse)
+    async def serve_miniapp():
+        html = Path("miniapp/index.html").read_text(encoding="utf-8")
+        return HTMLResponse(content=html)
 
     @app.post(WEBHOOK_PATH)
     async def telegram_webhook(request: Request) -> Response:
