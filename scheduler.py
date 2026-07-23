@@ -32,9 +32,11 @@ async def run_parsers(bot: Bot) -> dict:
 
     for f in filters:
         try:
-            autoru_results, drom_results = await asyncio.gather(
+            logger.info(f"scheduler: фильтр «{f.name}» sources={f.sources}")
+            autoru_results, drom_results, avito_results = await asyncio.gather(
                 autoru_parser.search(f),
                 drom_parser.search(f),
+                avito_parser.search(f),
                 return_exceptions=True,
             )
 
@@ -49,6 +51,11 @@ async def run_parsers(bot: Bot) -> dict:
                 logger.error(f"drom ошибка «{f.name}»: {drom_results}")
             else:
                 all_listings.extend(drom_results)
+
+            if isinstance(avito_results, Exception):
+                logger.error(f"avito ошибка «{f.name}»: {avito_results}")
+            else:
+                all_listings.extend(avito_results)
 
             if all_listings:
                 new_count = await process_listings(
