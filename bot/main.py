@@ -85,8 +85,9 @@ def create_app() -> FastAPI:
         except Exception as e:
             ssr_data = {"seen_total":0,"seen_24h":0,"seen_1h":0,"active_filters":0,"recent_listings":[],"hourly":[],"daily":[]}
 
-        # Встраиваем данные перед закрывающим </script>
-        ssr_script = f"<script>window.__SSR__ = {_json.dumps(ssr_data, ensure_ascii=False)};</script>"
+        # Встраиваем данные — ensure_ascii=True чтобы избежать проблем со спецсимволами
+        ssr_json = _json.dumps(ssr_data, ensure_ascii=True)
+        ssr_script = f"<script>window.__SSR__ = {ssr_json};</script>"
         html = html.replace("</head>", ssr_script + "</head>", 1)
         return HTMLResponse(content=html)
 
