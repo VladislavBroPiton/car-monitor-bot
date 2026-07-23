@@ -127,6 +127,7 @@ async def mark_seen(
     year: Optional[int] = None,
     mileage: Optional[int] = None,
     city: Optional[str] = None,
+    transmission: Optional[str] = None,
 ) -> bool:
     pool = await get_pool()
     # Дополнительная проверка по URL для Авито (external_id может меняться)
@@ -139,11 +140,11 @@ async def mark_seen(
     result = await pool.execute(
         """
         INSERT INTO seen_listings
-            (source, external_id, url, title, price, year, mileage, city)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+            (source, external_id, url, title, price, year, mileage, city, transmission)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
         ON CONFLICT (source, external_id) DO NOTHING
         """,
-        source, external_id, url, title, price, year, mileage, city,
+        source, external_id, url, title, price, year, mileage, city, transmission,
     )
     return result == "INSERT 0 1"
 
