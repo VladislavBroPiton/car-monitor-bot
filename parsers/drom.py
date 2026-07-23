@@ -6,6 +6,7 @@ from typing import Optional
 import aiohttp
 from bs4 import BeautifulSoup
 
+from config import SCRAPER_API_KEY
 from parsers.base import BaseParser, Listing, SearchFilter
 
 logger = logging.getLogger(__name__)
@@ -216,27 +217,49 @@ def _parse_card(card, filter_name: str) -> Optional[Listing]:
 
 async def _fetch_page(url: str) -> Optional[str]:
     """Запрос с повторной попыткой при 429."""
-    # Один запрос без retry — Дром заблокировал US IP Render
-    try:
-        await asyncio.sleep(random.uniform(1.0, 2.0))
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                url,
-                headers=_get_headers(),
-                timeout=aiohttp.ClientTimeout(total=15),
-                allow_redirects=True,
-                ssl=True,
-            ) as resp:
-                if resp.status == 429:
-                    logger.warning(f"drom: 429 rate limit (US IP заблокирован), пропускаем")
-                    return None
-                if resp.status != 200:
-                    logger.warning(f"drom: статус {resp.status} для {url}")
-                    return None
-                return await resp.text()
-    except Exception as e:
-        logger.error(f"drom: ошибка запроса {url}: {e}")
-        return None
+    if SCRAPER_API_KEY:
+        # Через ScraperAPI — обходит блокировку US IP
+        scraper_url = (
+            f"https://api.scraperapi.com/"
+            f"?api_key={SCRAPER_API_KEY}"
+            f"&url={url}"
+            f"&country_code=ru"
+        )
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    scraper_url,
+                    timeout=aiohttp.ClientTimeout(total=60),
+                ) as resp:
+                    if resp.status != 200:
+                        logger.warning(f"drom: ScraperAPI статус {resp.status} для {url}")
+                        return None
+                    return await resp.text()
+        except Exception as e:
+            logger.error(f"drom: ScraperAPI ошибка для {url}: {e}")
+            return None
+    else:
+        # Прямой запрос — работает только с RU IP
+        try:
+            await asyncio.sleep(random.uniform(1.0, 2.0))
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url,
+                    headers=_get_headers(),
+                    timeout=aiohttp.ClientTimeout(total=15),
+                    allow_redirects=True,
+                    ssl=True,
+                ) as resp:
+                    if resp.status == 429:
+                        logger.warning(f"drom: 429 rate limit (US IP заблокирован), пропускаем")
+                        return None
+                    if resp.status != 200:
+                        logger.warning(f"drom: статус {resp.status} для {url}")
+                        return None
+                    return await resp.text()
+        except Exception as e:
+            logger.error(f"drom: ошибка запроса {url}: {e}")
+            return None
 
 
 def _parse_html(html: str, filter_name: str) -> list[Listing]:
