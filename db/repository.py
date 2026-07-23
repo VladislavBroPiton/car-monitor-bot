@@ -130,10 +130,18 @@ async def mark_seen(
     transmission: Optional[str] = None,
 ) -> bool:
     pool = await get_pool()
-    # Дополнительная проверка по URL для Авито (external_id может меняться)
-    if source == "avito" and url:
+    # Дедупликация по URL
+    if url:
         exists = await pool.fetchval(
             "SELECT 1 FROM seen_listings WHERE url = $1", url
+        )
+        if exists:
+            return False
+    # Дедупликация по заголовку + цене (для Авито с нестабильными URL)
+    if source == "avito" and title and price:
+        exists = await pool.fetchval(
+            "SELECT 1 FROM seen_listings WHERE source = $1 AND title = $2 AND price = $3",
+            source, title, price
         )
         if exists:
             return False
