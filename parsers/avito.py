@@ -50,7 +50,10 @@ CITY_SLUG = {
     "Тверь":                "tver",
 }
 
-# Маппинг марок для URL Авито
+# Маппинг марок → строковый параметр Авито для фильтра в URL
+# Формат: /avtomobili?brand=chevrolet не работает,
+# но можно фильтровать через поиск в заголовке — см. _matches_filter
+# Оставляем для совместимости
 BRAND_SLUG = {
     "CHEVROLET":  "chevrolet",
     "SKODA":      "skoda",
@@ -73,6 +76,10 @@ BRAND_SLUG = {
     "GEELY":      "geely",
     "CHERY":      "chery",
 }
+
+# Авито поддерживает многостраничную загрузку — берём больше страниц
+# чтобы найти нужные объявления среди всех авто города
+MAX_PAGES = 3
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -210,21 +217,37 @@ def _matches_filter(title: str, brand: Optional[str], model: Optional[str]) -> b
         return True
     title_lower = title.lower()
     brand_lower = brand.lower()
-    # Маппинг для кириллических названий
+    # Маппинг для кириллических названий и вариантов написания
     brand_aliases = {
-        "lada": ["lada", "ваз", "лада"],
-        "chevrolet": ["chevrolet", "шевроле"],
-        "skoda": ["skoda", "шкода"],
+        "lada":       ["lada", "ваз", "лада", "vaz"],
+        "chevrolet":  ["chevrolet", "шевроле"],
+        "skoda":      ["skoda", "шкода"],
         "volkswagen": ["volkswagen", "vw", "фольксваген"],
-        "mercedes": ["mercedes", "мерседес"],
-        "bmw": ["bmw", "бмв"],
+        "mercedes":   ["mercedes", "мерседес"],
+        "bmw":        ["bmw", "бмв"],
+        "kia":        ["kia", "киа"],
+        "hyundai":    ["hyundai", "хендай", "хундай"],
+        "toyota":     ["toyota", "тойота"],
+        "nissan":     ["nissan", "ниссан"],
+        "renault":    ["renault", "рено"],
+        "ford":       ["ford", "форд"],
+        "mitsubishi": ["mitsubishi", "мицубиси"],
+        "mazda":      ["mazda", "мазда"],
+        "audi":       ["audi", "ауди"],
+        "honda":      ["honda", "хонда"],
+        "subaru":     ["subaru", "субару"],
+        "lexus":      ["lexus", "лексус"],
+        "geely":      ["geely", "джили"],
+        "chery":      ["chery", "чери"],
     }
     aliases = brand_aliases.get(brand_lower, [brand_lower])
     if not any(a in title_lower for a in aliases):
         return False
     if model:
-        model_lower = model.lower().replace("_", " ")
-        if model_lower not in title_lower:
+        # Убираем спецсимволы из модели для поиска
+        model_lower = model.lower().replace("_", " ").replace("-", " ")
+        title_clean = title_lower.replace("-", " ")
+        if model_lower not in title_clean:
             return False
     return True
 
@@ -300,23 +323,40 @@ class AvitoParser(BaseParser):
         url = _build_url(f, city_slug, use_radius=True)
         logger.info(f"avito: запрос для «{f.name}» (база: {base_city}, радиус 200км): {url}")
 
-        html = await _fetch(url)
-        if not html:
-            logger.info(f"avito: фильтр «{f.name}» → 0 объявлений")
-            return []
+        all_listings: list[Listing] = []
+        seen_ids: set[str] = set()
+        total_cards = 0
 
-        listings = _parse_cards(html, f.name, base_city)
+        # Загружаем несколько страниц чтобы найти нужные объявления
+        for page in range(1, MAX_PAGES + 1):
+            page_url = url + (f"&p={page}" if page > 1 else "")
+            html = await _fetch(page_url)
+            if not html:
+                break
 
-        # Логируем первые заголовки для отладки фильтра
-        if listings:
-            sample = [l.title for l in listings[:5]]
-            logger.info(f"avito: примеры заголовков: {sample}")
+            page_listings = _parse_cards(html, f.name, base_city)
+            if not page_listings:
+                break  # Пустая страница — больше нет
 
-        # Фильтруем по марке/модели из заголовка
-        if f.brand:
-            before = len(listings)
-            listings = [l for l in listings if _matches_filter(l.title, f.brand, f.model)]
-            logger.info(f"avito: после фильтра марки/модели: {len(listings)} из {before}")
+            total_cards += len(page_listings)
 
-        logger.info(f"avito: фильтр «{f.name}» → {len(listings)} объявлений")
-        return listings
+            # Логируем примеры с первой страницы
+            if page == 1 and page_listings:
+                sample = [l.title for l in page_listings[:5]]
+                logger.info(f"avito: примеры заголовков: {sample}")
+
+            # Фильтруем по марке/модели
+            if f.brand:
+                page_listings = [l for l in page_listings
+                                 if _matches_filter(l.title, f.brand, f.model)]
+
+            for listing in page_listings:
+                if listing.external_id not in seen_ids:
+                    seen_ids.add(listing.external_id)
+                    all_listings.append(listing)
+
+        logger.info(
+            f"avito: фильтр «{f.name}» → {len(all_listings)} объявлений "
+            f"(просмотрено {total_cards} карточек на {MAX_PAGES} стр.)"
+        )
+        return all_listings
