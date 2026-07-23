@@ -146,3 +146,69 @@ async def cleanup_old_listings(days: int = 30):
     return await pool.execute(
         f"DELETE FROM seen_listings WHERE created_at < NOW() - INTERVAL '{days} days'"
     )
+
+
+# ── Price history ─────────────────────────────────────────────────────────────
+
+async def record_price(source: str, external_id: str, price: int):
+    """Записываем цену если изменилась."""
+    pool = await get_pool()
+    last = await pool.fetchval(
+        "SELECT price FROM price_history WHERE source=$1 AND external_id=$2 ORDER BY recorded_at DESC LIMIT 1",
+        source, external_id
+    )
+    if last != price:
+        await pool.execute(
+            "INSERT INTO price_history (source, external_id, price) VALUES ($1,$2,$3)",
+            source, external_id, price
+        )
+        return last  # возвращает старую цену (или None если первая запись)
+    return None
+
+
+async def get_price_history(source: str, external_id: str) -> list:
+    pool = await get_pool()
+    rows = await pool.fetch(
+        "SELECT price, recorded_at FROM price_history WHERE source=$1 AND external_id=$2 ORDER BY recorded_at",
+        source, external_id
+    )
+    return [dict(r) for r in rows]
+
+
+# ── Notification settings ─────────────────────────────────────────────────────
+
+async def get_notification_settings(user_id: int) -> dict:
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "SELECT * FROM notification_settings WHERE user_id=$1", user_id
+    )
+    if row:
+        return dict(row)
+    return {
+        "user_id": user_id,
+        "price_threshold": None,
+        "quiet_from": 23,
+        "quiet_to": 8,
+        "notify_price_drop": True,
+    }
+
+
+async def save_notification_settings(user_id: int, settings: dict):
+    pool = await get_pool()
+    await pool.execute(
+        """
+        INSERT INTO notification_settings
+            (user_id, price_threshold, quiet_from, quiet_to, notify_price_drop)
+        VALUES ($1,$2,$3,$4,$5)
+        ON CONFLICT (user_id) DO UPDATE SET
+            price_threshold   = EXCLUDED.price_threshold,
+            quiet_from        = EXCLUDED.quiet_from,
+            quiet_to          = EXCLUDED.quiet_to,
+            notify_price_drop = EXCLUDED.notify_price_drop
+        """,
+        user_id,
+        settings.get("price_threshold"),
+        settings.get("quiet_from", 23),
+        settings.get("quiet_to", 8),
+        settings.get("notify_price_drop", True),
+    )
