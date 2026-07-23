@@ -5,9 +5,10 @@ from aiogram import Bot
 from aiogram.enums import ParseMode
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
+import datetime
 from config import OWNER_ID
 from parsers.base import Listing
-from db.repository import mark_seen
+from db.repository import mark_seen, record_price, get_notification_settings
 
 logger = logging.getLogger(__name__)
 
@@ -146,13 +147,29 @@ async def send_listing(bot: Bot, listing: Listing, chat_id: int = OWNER_ID):
         logger.error(f"notifier: ошибка отправки: {e}")
 
 
+def _is_quiet_hours(quiet_from: int, quiet_to: int) -> bool:
+    """Проверяем тихие часы (московское время UTC+3)."""
+    hour = (datetime.datetime.utcnow().hour + 3) % 24
+    if quiet_from > quiet_to:  # например 23-8
+        return hour >= quiet_from or hour < quiet_to
+    return quiet_from <= hour < quiet_to
+
+
 async def process_listings(
     bot: Bot,
     listings: list[Listing],
     chat_id: int = OWNER_ID,
 ) -> int:
     new_count = 0
+    settings = await get_notification_settings(chat_id)
+    quiet = _is_quiet_hours(settings.get("quiet_from", 23), settings.get("quiet_to", 8))
+    threshold = settings.get("price_threshold")
+
     for listing in listings:
+        # Проверяем порог цены
+        if threshold and listing.price and listing.price > threshold:
+            continue
+
         is_new = await mark_seen(
             source=listing.source,
             external_id=listing.external_id,
@@ -163,9 +180,54 @@ async def process_listings(
             mileage=listing.mileage,
             city=listing.city,
         )
+
+        # Записываем цену в историю
+        if listing.price:
+            await record_price(listing.source, listing.external_id, listing.price)
+
         if not is_new:
             continue
+
         new_count += 1
+
+        # В тихие часы не отправляем (но считаем)
+        if quiet:
+            continue
+
         await send_listing(bot, listing, chat_id=chat_id)
         await asyncio.sleep(SEND_DELAY)
+
     return new_count
+
+
+async def process_price_drops(
+    bot: Bot,
+    listings: list[Listing],
+    chat_id: int = OWNER_ID,
+):
+    """Проверяем снижение цены на уже виденные объявления."""
+    settings = await get_notification_settings(chat_id)
+    if not settings.get("notify_price_drop", True):
+        return
+    quiet = _is_quiet_hours(settings.get("quiet_from", 23), settings.get("quiet_to", 8))
+    if quiet:
+        return
+
+    for listing in listings:
+        if not listing.price:
+            continue
+        old_price = await record_price(listing.source, listing.external_id, listing.price)
+        if old_price and old_price > listing.price:
+            drop = old_price - listing.price
+            pct  = round(drop / old_price * 100)
+            text = (
+                f"📉 <b>Цена снижена!</b>\n"
+                f"{listing.title}\n\n"
+                f"Было: <s>{old_price:,} ₽</s>\n"
+                f"Стало: <b>{listing.price:,} ₽</b> (-{drop:,} ₽ / -{pct}%)\n\n"
+                f'<a href="{listing.url}">Открыть →</a>'
+            ).replace(",", "\u2009")
+            try:
+                await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+            except Exception as e:
+                logger.error(f"price drop notify error: {e}")
