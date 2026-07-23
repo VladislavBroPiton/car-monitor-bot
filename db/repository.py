@@ -59,7 +59,7 @@ async def create_filter(
     sources: list[str] = None,
 ) -> asyncpg.Record:
     if sources is None:
-        sources = ["autoru", "drom"]
+        sources = ["autoru", "drom", "avito"]
     pool = await get_pool()
     return await pool.fetchrow(
         """
