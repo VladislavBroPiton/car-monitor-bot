@@ -1269,12 +1269,12 @@ async def _finish_filter(msg, state: FSMContext, sources: list, from_call: bool)
 
 # ── Избранное / скрыть ────────────────────────────────────────────────────────
 
-@router.callback_query(F.data.startswith("fav_add:"))
+@router.callback_query(F.data.startswith("fav:"))
 async def cb_fav_add(call: CallbackQuery):
     await call.answer("⭐️ Добавлено в избранное (скоро)")
 
 
-@router.callback_query(F.data.startswith("listing_hide:"))
+@router.callback_query(F.data.startswith("hide:"))
 async def cb_listing_hide(call: CallbackQuery):
     await call.message.delete()
     await call.answer("🚫 Скрыто")
