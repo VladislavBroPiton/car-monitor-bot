@@ -129,6 +129,13 @@ async def mark_seen(
     city: Optional[str] = None,
 ) -> bool:
     pool = await get_pool()
+    # Дополнительная проверка по URL для Авито (external_id может меняться)
+    if source == "avito" and url:
+        exists = await pool.fetchval(
+            "SELECT 1 FROM seen_listings WHERE url = $1", url
+        )
+        if exists:
+            return False
     result = await pool.execute(
         """
         INSERT INTO seen_listings
