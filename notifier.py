@@ -109,6 +109,8 @@ def _build_message(listing: Listing) -> str:
 
 def _build_keyboard(listing: Listing) -> InlineKeyboardMarkup:
     """Кнопки прямо под объявлением."""
+    # callback_data ограничен 64 байтами — берём только первые 20 символов external_id
+    short_id = listing.external_id[:20]
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
@@ -119,11 +121,11 @@ def _build_keyboard(listing: Listing) -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(
                 text="⭐️ В избранное",
-                callback_data=f"fav_add:{listing.source}:{listing.external_id}",
+                callback_data=f"fav:{listing.source}:{short_id}",
             ),
             InlineKeyboardButton(
                 text="🚫 Скрыть",
-                callback_data=f"listing_hide:{listing.source}:{listing.external_id}",
+                callback_data=f"hide:{listing.source}:{short_id}",
             ),
         ],
     ])
