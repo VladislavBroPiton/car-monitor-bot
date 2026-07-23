@@ -703,7 +703,15 @@ async function loadListings(reset=false) {
 function loadMoreListings() { lstPage++; loadListings(false); }
 
 function listingCard(l, faved=false) {
-  const specs = [l.year?l.year+' г.':'', fmtM(l.mileage)].filter(Boolean).join(' · ');
+  const trMap = {AUTO:'Автомат',MECHANICAL:'Механика',ROBOT:'Робот',VARIATOR:'Вариатор'};
+  // Парсим КПП из заголовка если не задано отдельно
+  let trStr = l.transmission ? trMap[l.transmission]||'' : '';
+  if(!trStr && l.title) {
+    if(/\bAT\b|AMT/.test(l.title)) trStr = 'Автомат';
+    else if(/\bMT\b/.test(l.title)) trStr = 'Механика';
+    else if(/CVT/.test(l.title)) trStr = 'Вариатор';
+  }
+  const specs = [l.year?l.year+' г.':'', fmtM(l.mileage), trStr].filter(Boolean).join(' · ');
   const eid = (l.external_id||'').replace(/'/g,"\'");
   const url = (l.url||'').replace(/'/g,"\'");
   const ttl = (l.title||'').replace(/'/g,"\'");
@@ -935,7 +943,15 @@ function addSwipe(el) {
 // Переопределяем listingCard чтобы добавить кнопку поделиться
 const _origCard = listingCard;
 function listingCard(l, faved=false) {
-  const specs = [l.year?l.year+' г.':'', fmtM(l.mileage)].filter(Boolean).join(' · ');
+  const trMap = {AUTO:'Автомат',MECHANICAL:'Механика',ROBOT:'Робот',VARIATOR:'Вариатор'};
+  // Парсим КПП из заголовка если не задано отдельно
+  let trStr = l.transmission ? trMap[l.transmission]||'' : '';
+  if(!trStr && l.title) {
+    if(/\bAT\b|AMT/.test(l.title)) trStr = 'Автомат';
+    else if(/\bMT\b/.test(l.title)) trStr = 'Механика';
+    else if(/CVT/.test(l.title)) trStr = 'Вариатор';
+  }
+  const specs = [l.year?l.year+' г.':'', fmtM(l.mileage), trStr].filter(Boolean).join(' · ');
   const eid = (l.external_id||'').replace(/'/g,"\'");
   const url = (l.url||'').replace(/'/g,"\'");
   const ttl = (l.title||'').replace(/'/g,"\'");
