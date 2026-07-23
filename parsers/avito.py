@@ -92,10 +92,11 @@ def _get_headers() -> dict:
     }
 
 
-def _build_url(f: SearchFilter, city_slug: str) -> str:
+def _build_url(f: SearchFilter, city_slug: str, use_radius: bool = False) -> str:
     """
-    Формат: https://www.avito.ru/volgogradskaya_oblast_volzhskiy/avtomobili?pmin=500000&pmax=1500000&s=104
+    Формат: https://www.avito.ru/volgograd/avtomobili?pmin=500000&radius=200&s=104
     Марка и модель фильтруются по заголовку после получения результатов.
+    radius=200 покрывает всю область одним запросом.
     """
     base = f"https://www.avito.ru/{city_slug}/avtomobili"
 
@@ -112,6 +113,10 @@ def _build_url(f: SearchFilter, city_slug: str) -> str:
         params.append(f"km_do={f.mileage_to}")
     if f.mileage_from:
         params.append(f"km_ot={f.mileage_from}")
+
+    if use_radius:
+        params.append("radius=200")
+        params.append("searchRadius=200")
 
     # Сортировка по дате — новые сначала
     params.append("s=104")
@@ -252,39 +257,36 @@ class AvitoParser(BaseParser):
         if "avito" not in f.sources:
             return []
 
-        # Определяем города для поиска
+        # Определяем главный город для запроса
+        # Авито поддерживает radius=200 — покрывает всю область одним запросом
         cities = list(f.cities or [])
-        if not cities:
-            cities = ["Волгоград"]  # дефолт если не указано
+        
+        # Берём первый крупный город из списка как базовый для запроса
+        base_city = "Волгоград"  # дефолт
+        priority = ["Волгоград", "Волжский", "Камышин"]
+        for p in priority:
+            if p in cities:
+                base_city = p
+                break
+        else:
+            base_city = cities[0]
 
-        all_listings: list[Listing] = []
-        seen_ids: set[str] = set()
+        city_slug = CITY_SLUG.get(base_city, "volgograd")
+        url = _build_url(f, city_slug, use_radius=True)
+        logger.info(f"avito: запрос для «{f.name}» (база: {base_city}, радиус 200км): {url}")
 
-        for city in cities:
-            city_slug = CITY_SLUG.get(city)
-            if not city_slug:
-                logger.warning(f"avito: нет slug для города «{city}»")
-                continue
+        html = await _fetch(url)
+        if not html:
+            logger.info(f"avito: фильтр «{f.name}» → 0 объявлений")
+            return []
 
-            url = _build_url(f, city_slug)
-            logger.info(f"avito: запрос для «{f.name}» / {city}: {url}")
+        listings = _parse_cards(html, f.name, base_city)
 
-            html = await _fetch(url)
-            if not html:
-                continue
+        # Фильтруем по марке/модели из заголовка
+        if f.brand:
+            before = len(listings)
+            listings = [l for l in listings if _matches_filter(l.title, f.brand, f.model)]
+            logger.info(f"avito: после фильтра марки/модели: {len(listings)} из {before}")
 
-            listings = _parse_cards(html, f.name, city)
-
-            # Фильтруем по марке/модели из заголовка
-            if f.brand:
-                before = len(listings)
-                listings = [l for l in listings if _matches_filter(l.title, f.brand, f.model)]
-                logger.info(f"avito: после фильтра марки/модели: {len(listings)} из {before}")
-
-            for listing in listings:
-                if listing.external_id not in seen_ids:
-                    seen_ids.add(listing.external_id)
-                    all_listings.append(listing)
-
-        logger.info(f"avito: фильтр «{f.name}» → {len(all_listings)} объявлений")
-        return all_listings
+        logger.info(f"avito: фильтр «{f.name}» → {len(listings)} объявлений")
+        return listings
