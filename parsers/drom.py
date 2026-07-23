@@ -216,34 +216,27 @@ def _parse_card(card, filter_name: str) -> Optional[Listing]:
 
 async def _fetch_page(url: str) -> Optional[str]:
     """Запрос с повторной попыткой при 429."""
-    for attempt in range(3):
-        try:
-            # Случайная задержка чтобы не выглядеть как бот
-            await asyncio.sleep(random.uniform(2.0, 5.0))
-
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    url,
-                    headers=_get_headers(),
-                    timeout=aiohttp.ClientTimeout(total=30),
-                    allow_redirects=True,
-                    ssl=True,
-                ) as resp:
-                    if resp.status == 429:
-                        wait = 30 * (attempt + 1)
-                        logger.warning(f"drom: 429 rate limit, ждём {wait}с (попытка {attempt+1})")
-                        await asyncio.sleep(wait)
-                        continue
-                    if resp.status != 200:
-                        logger.warning(f"drom: статус {resp.status} для {url}")
-                        return None
-                    return await resp.text()
-        except asyncio.TimeoutError:
-            logger.error(f"drom: timeout для {url} (попытка {attempt+1})")
-        except Exception as e:
-            logger.error(f"drom: ошибка запроса {url}: {e}")
-            return None
-    return None
+    # Один запрос без retry — Дром заблокировал US IP Render
+    try:
+        await asyncio.sleep(random.uniform(1.0, 2.0))
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                url,
+                headers=_get_headers(),
+                timeout=aiohttp.ClientTimeout(total=15),
+                allow_redirects=True,
+                ssl=True,
+            ) as resp:
+                if resp.status == 429:
+                    logger.warning(f"drom: 429 rate limit (US IP заблокирован), пропускаем")
+                    return None
+                if resp.status != 200:
+                    logger.warning(f"drom: статус {resp.status} для {url}")
+                    return None
+                return await resp.text()
+    except Exception as e:
+        logger.error(f"drom: ошибка запроса {url}: {e}")
+        return None
 
 
 def _parse_html(html: str, filter_name: str) -> list[Listing]:
