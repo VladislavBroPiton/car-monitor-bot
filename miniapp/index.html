@@ -397,7 +397,7 @@ body.light-force{--bg:#F5F5F7;--bg2:#FFFFFF;--bg3:#F0F0F3;--bg4:#E8E8ED;--border
 <div class="toast" id="toast"></div>
 
 <script>
-const BASE = 'https://car-monitor-bot-oov7.onrender.com';
+const BASE = window.location.origin; // автоматически берём текущий сервер
 const tg = window.Telegram?.WebApp;
 if(tg){
   tg.ready();
