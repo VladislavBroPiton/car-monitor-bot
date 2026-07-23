@@ -179,6 +179,36 @@ async def api_remove_favorite(source: str, external_id: str):
     return {"ok": True}
 
 
+# ── Notification settings ─────────────────────────────────────────────────────
+
+class NotifSettings(BaseModel):
+    price_threshold:    Optional[int]  = None
+    quiet_from:         Optional[int]  = 23
+    quiet_to:           Optional[int]  = 8
+    notify_price_drop:  Optional[bool] = True
+
+
+@router.get("/settings")
+async def api_get_settings():
+    from db.repository import get_notification_settings
+    return await get_notification_settings(OWNER_ID)
+
+
+@router.post("/settings")
+async def api_save_settings(body: NotifSettings):
+    from db.repository import save_notification_settings
+    await save_notification_settings(OWNER_ID, body.dict())
+    return {"ok": True}
+
+
+# ── Price history ─────────────────────────────────────────────────────────────
+
+@router.get("/price_history/{source}/{external_id}")
+async def api_price_history(source: str, external_id: str):
+    from db.repository import get_price_history
+    return await get_price_history(source, external_id)
+
+
 # ── Seen ──────────────────────────────────────────────────────────────────────
 
 @router.post("/seen/clear")
