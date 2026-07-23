@@ -94,18 +94,10 @@ def _get_headers() -> dict:
 
 def _build_url(f: SearchFilter, city_slug: str) -> str:
     """
-    Формат: https://www.avito.ru/volgograd/avtomobili/chevrolet_cruze
-    Параметры: pmin, pmax, year_from, year_to, km_ot, km_do, transmission
+    Формат: https://www.avito.ru/volgogradskaya_oblast_volzhskiy/avtomobili?pmin=500000&pmax=1500000&s=104
+    Марка и модель фильтруются по заголовку после получения результатов.
     """
     base = f"https://www.avito.ru/{city_slug}/avtomobili"
-
-    if f.brand:
-        brand_slug = BRAND_SLUG.get(f.brand.upper(), f.brand.lower())
-        model_slug = f.model.lower().replace(" ", "_") if f.model else ""
-        if model_slug:
-            base += f"/{brand_slug}_{model_slug}"
-        else:
-            base += f"/{brand_slug}"
 
     params: list[str] = []
     if f.price_from:
@@ -120,11 +112,6 @@ def _build_url(f: SearchFilter, city_slug: str) -> str:
         params.append(f"km_do={f.mileage_to}")
     if f.mileage_from:
         params.append(f"km_ot={f.mileage_from}")
-    if f.transmission:
-        tr_map = {"AUTO": "2", "MECHANICAL": "1"}
-        tr = tr_map.get(f.transmission.upper())
-        if tr:
-            params.append(f"transmission={tr}")
 
     # Сортировка по дате — новые сначала
     params.append("s=104")
@@ -211,6 +198,31 @@ def _parse_cards(html: str, filter_name: str, city: str) -> list[Listing]:
     return listings
 
 
+def _matches_filter(title: str, brand: Optional[str], model: Optional[str]) -> bool:
+    """Проверяем что заголовок содержит нужную марку и модель."""
+    if not brand:
+        return True
+    title_lower = title.lower()
+    brand_lower = brand.lower()
+    # Маппинг для кириллических названий
+    brand_aliases = {
+        "lada": ["lada", "ваз", "лада"],
+        "chevrolet": ["chevrolet", "шевроле"],
+        "skoda": ["skoda", "шкода"],
+        "volkswagen": ["volkswagen", "vw", "фольксваген"],
+        "mercedes": ["mercedes", "мерседес"],
+        "bmw": ["bmw", "бмв"],
+    }
+    aliases = brand_aliases.get(brand_lower, [brand_lower])
+    if not any(a in title_lower for a in aliases):
+        return False
+    if model:
+        model_lower = model.lower().replace("_", " ")
+        if model_lower not in title_lower:
+            return False
+    return True
+
+
 async def _fetch(url: str) -> Optional[str]:
     await asyncio.sleep(random.uniform(1.5, 3.5))
     try:
@@ -262,6 +274,12 @@ class AvitoParser(BaseParser):
                 continue
 
             listings = _parse_cards(html, f.name, city)
+
+            # Фильтруем по марке/модели из заголовка
+            if f.brand:
+                before = len(listings)
+                listings = [l for l in listings if _matches_filter(l.title, f.brand, f.model)]
+                logger.info(f"avito: после фильтра марки/модели: {len(listings)} из {before}")
 
             for listing in listings:
                 if listing.external_id not in seen_ids:
