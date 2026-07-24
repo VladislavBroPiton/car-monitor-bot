@@ -565,7 +565,8 @@ async function loadDashboard() {
       `${statsData.active_filters||0} активных фильтров`;
     renderActivity(statsData.recent_listings||[]);
     renderChart();
-    renderDeals(statsData.recent_listings||[]);
+    // Топ дешёвых — отдельный список из БД (все за 24ч), не просто последние 20
+    renderDeals(statsData.top_deals || statsData.recent_listings||[]);
     renderAvgPrices(statsData.recent_listings||[]);
     updateNewBadge(statsData.seen_total||0);
   } catch(e) {
@@ -1091,9 +1092,9 @@ function updateNewBadge(total) {
 function renderDeals(listings) {
   const el = document.getElementById('deal-list');
   if(!el) return;
+  // Данные уже отсортированы по цене с сервера
   const deals = listings
     .filter(l => l.price && l.price > 0)
-    .sort((a,b) => (a.price||0) - (b.price||0))
     .slice(0, 8);
   if(!deals.length) {
     el.innerHTML = '<div style="padding:0 16px;color:var(--text3);font-size:13px">Нет данных за сутки</div>';
