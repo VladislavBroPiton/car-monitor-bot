@@ -72,6 +72,7 @@ def create_app() -> FastAPI:
             seen_1h        = await pool.fetchval("SELECT COUNT(*) FROM seen_listings WHERE created_at > NOW() - INTERVAL '1 hour'")
             active_filters = await pool.fetchval("SELECT COUNT(*) FROM filters WHERE is_active=TRUE")
             recent = await pool.fetch("SELECT source, external_id, url, title, price, city, created_at FROM seen_listings ORDER BY created_at DESC LIMIT 20")
+            top_deals_rows = await pool.fetch("SELECT source, external_id, url, title, price, city, created_at FROM seen_listings WHERE created_at > NOW() - INTERVAL '24 hours' AND price IS NOT NULL AND price > 0 ORDER BY price ASC LIMIT 10")
             hourly = await pool.fetch("SELECT DATE_TRUNC('hour', created_at) as hour, COUNT(*) as cnt FROM seen_listings WHERE created_at > NOW() - INTERVAL '24 hours' GROUP BY hour ORDER BY hour")
             daily  = await pool.fetch("SELECT DATE_TRUNC('day', created_at) as day, COUNT(*) as cnt FROM seen_listings WHERE created_at > NOW() - INTERVAL '7 days' GROUP BY day ORDER BY day")
 
@@ -79,6 +80,7 @@ def create_app() -> FastAPI:
                 "seen_total": seen_total, "seen_24h": seen_24h,
                 "seen_1h": seen_1h, "active_filters": active_filters,
                 "recent_listings": [{"source":r["source"],"external_id":r["external_id"],"url":r["url"],"title":r["title"],"price":r["price"],"city":r["city"],"created_at":str(r["created_at"])} for r in recent],
+            "top_deals": [{"source":r["source"],"external_id":r["external_id"],"url":r["url"],"title":r["title"],"price":r["price"],"city":r["city"],"created_at":str(r["created_at"])} for r in top_deals_rows],
                 "hourly": [{"hour":str(r["hour"]),"cnt":r["cnt"]} for r in hourly],
                 "daily":  [{"day":str(r["day"]),"cnt":r["cnt"]}  for r in daily],
             }
