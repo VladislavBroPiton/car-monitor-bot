@@ -28,6 +28,15 @@ async def api_stats():
         "SELECT source, external_id, url, title, price, city, created_at FROM seen_listings ORDER BY created_at DESC LIMIT 20"
     )
 
+    # Топ дешёвых за 24 часа
+    top_deals = await pool.fetch(
+        """SELECT source, external_id, url, title, price, city, created_at
+           FROM seen_listings
+           WHERE created_at > NOW() - INTERVAL '24 hours'
+           AND price IS NOT NULL AND price > 0
+           ORDER BY price ASC LIMIT 10"""
+    )
+
     # Активность по часам за последние 24ч (для графика)
     hourly = await pool.fetch(
         """
