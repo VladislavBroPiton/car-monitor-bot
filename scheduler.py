@@ -9,6 +9,7 @@ from parsers.base import SearchFilter
 from parsers.autoru import AutoRuParser
 from parsers.drom import DromParser
 from parsers.avito import AvitoParser
+from parsers.copart import CopartParser
 from notifier import process_listings
 
 logger = logging.getLogger(__name__)
@@ -16,6 +17,7 @@ logger = logging.getLogger(__name__)
 autoru_parser = AutoRuParser()
 drom_parser = DromParser()
 avito_parser = AvitoParser()
+copart_parser = CopartParser()
 
 
 async def run_parsers(bot: Bot) -> dict:
@@ -33,29 +35,24 @@ async def run_parsers(bot: Bot) -> dict:
     for f in filters:
         try:
             logger.info(f"scheduler: фильтр «{f.name}» sources={f.sources}")
-            autoru_results, drom_results, avito_results = await asyncio.gather(
-                autoru_parser.search(f),
-                drom_parser.search(f),
-                avito_parser.search(f),
+            parsers = [
+                ("autoru", autoru_parser),
+                ("drom",   drom_parser),
+                ("avito",  avito_parser),
+                ("copart", copart_parser),
+            ]
+            results = await asyncio.gather(
+                *(p.search(f) for _, p in parsers),
                 return_exceptions=True,
             )
 
             all_listings = []
 
-            if isinstance(autoru_results, Exception):
-                logger.error(f"autoru ошибка «{f.name}»: {autoru_results}")
-            else:
-                all_listings.extend(autoru_results)
-
-            if isinstance(drom_results, Exception):
-                logger.error(f"drom ошибка «{f.name}»: {drom_results}")
-            else:
-                all_listings.extend(drom_results)
-
-            if isinstance(avito_results, Exception):
-                logger.error(f"avito ошибка «{f.name}»: {avito_results}")
-            else:
-                all_listings.extend(avito_results)
+            for (source, _), result in zip(parsers, results):
+                if isinstance(result, Exception):
+                    logger.error(f"{source} ошибка «{f.name}»: {result}")
+                else:
+                    all_listings.extend(result)
 
             if all_listings:
                 new_count = await process_listings(

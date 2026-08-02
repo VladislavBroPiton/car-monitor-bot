@@ -1,14 +1,39 @@
+import datetime
+import logging
 import asyncpg
 from typing import Optional
 from config import DATABASE_URL
 
+logger = logging.getLogger(__name__)
+
 _pool: Optional[asyncpg.Pool] = None
+
+# Колонки, добавленные после первого релиза. Выполняем при старте, чтобы
+# не заходить руками в SQL-редактор Neon после каждого деплоя.
+_MIGRATIONS = (
+    "ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS damage_description TEXT",
+    "ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS auction_date TIMESTAMPTZ",
+    "ALTER TABLE favorites     ADD COLUMN IF NOT EXISTS damage_description TEXT",
+    "ALTER TABLE favorites     ADD COLUMN IF NOT EXISTS auction_date TIMESTAMPTZ",
+    "ALTER TABLE filters       ADD COLUMN IF NOT EXISTS auction_date_from DATE",
+    "ALTER TABLE filters       ADD COLUMN IF NOT EXISTS auction_date_to DATE",
+    "CREATE INDEX IF NOT EXISTS idx_seen_listings_auction_date ON seen_listings (auction_date)",
+)
+
+
+async def _apply_migrations(pool: asyncpg.Pool):
+    for sql in _MIGRATIONS:
+        try:
+            await pool.execute(sql)
+        except Exception as e:
+            logger.warning(f"миграция не применена ({sql[:60]}…): {e}")
 
 
 async def get_pool() -> asyncpg.Pool:
     global _pool
     if _pool is None:
         _pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
+        await _apply_migrations(_pool)
     return _pool
 
 
@@ -57,6 +82,8 @@ async def create_filter(
     transmission: Optional[str] = None,
     body_type: Optional[str] = None,
     sources: list[str] = None,
+    auction_date_from: Optional[datetime.date] = None,
+    auction_date_to: Optional[datetime.date] = None,
 ) -> asyncpg.Record:
     if sources is None:
         sources = ["autoru", "drom", "avito"]
@@ -66,13 +93,15 @@ async def create_filter(
         INSERT INTO filters
             (user_id, name, brand, model, year_from, year_to,
              price_from, price_to, mileage_from, mileage_to,
-             cities, transmission, body_type, sources)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+             cities, transmission, body_type, sources,
+             auction_date_from, auction_date_to)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
         RETURNING *
         """,
         user_id, name, brand, model, year_from, year_to,
         price_from, price_to, mileage_from, mileage_to,
         cities, transmission, body_type, sources,
+        auction_date_from, auction_date_to,
     )
 
 
@@ -87,6 +116,7 @@ async def update_filter_field(
         "name", "brand", "model", "year_from", "year_to",
         "price_from", "price_to", "mileage_from", "mileage_to",
         "cities", "transmission", "body_type", "sources",
+        "auction_date_from", "auction_date_to",
     }
     if field not in allowed:
         return False
@@ -128,6 +158,8 @@ async def mark_seen(
     mileage: Optional[int] = None,
     city: Optional[str] = None,
     transmission: Optional[str] = None,
+    damage_description: Optional[str] = None,
+    auction_date: Optional[datetime.datetime] = None,
 ) -> bool:
     pool = await get_pool()
     # Дедупликация по URL
@@ -148,11 +180,13 @@ async def mark_seen(
     result = await pool.execute(
         """
         INSERT INTO seen_listings
-            (source, external_id, url, title, price, year, mileage, city, transmission)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+            (source, external_id, url, title, price, year, mileage, city, transmission,
+             damage_description, auction_date)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
         ON CONFLICT (source, external_id) DO NOTHING
         """,
         source, external_id, url, title, price, year, mileage, city, transmission,
+        damage_description, auction_date,
     )
     return result == "INSERT 0 1"
 

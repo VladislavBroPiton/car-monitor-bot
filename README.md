@@ -1,6 +1,7 @@
 # Car Monitor Bot
 
-Telegram-бот для мониторинга новых объявлений о продаже авто на Auto.ru и Дром.ру.
+Telegram-бот для мониторинга новых объявлений о продаже авто на Auto.ru, Дром.ру,
+Авито и лотов аукциона Copart.
 
 ## Стек
 
@@ -23,6 +24,8 @@ car-monitor-bot/
 ├── parsers/
 │   ├── base.py        # Listing, SearchFilter, BaseParser
 │   ├── autoru.py      # Auto.ru внутренний AJAX API
+│   ├── avito.py       # Авито через ScraperAPI
+│   ├── copart.py      # Copart публичный JSON API
 │   └── drom.py        # Дром HTML парсер
 ├── db/
 │   ├── schema.sql     # DDL таблиц
@@ -53,6 +56,8 @@ WEBHOOK_HOST=...       # https://your-app.onrender.com
 WEBHOOK_SECRET=...     # любая случайная строка
 AUTORU_SESSION_ID=     # cookie с Auto.ru (опционально)
 AUTORU_CSRF_TOKEN=     # csrf токен Auto.ru (опционально)
+SCRAPER_API_KEY=       # ScraperAPI для Авито/Дрома (опционально)
+USD_RUB_RATE=90        # курс для пересчёта цен Copart (по умолчанию 90)
 ```
 
 ### 3. Render
@@ -85,6 +90,61 @@ Auto.ru использует Яндекс SmartCaptcha. Без cookies парс�
 3. Скопируй `autoru_sid` в `AUTORU_SESSION_ID`
 4. Скопируй `csrf_token` (или из заголовков запроса) в `AUTORU_CSRF_TOKEN`
 5. Обновляй по мере необходимости в настройках Render
+
+## Copart
+
+Аукцион битых авто из США и Канады. Работает через публичный JSON API самого сайта —
+ни ScraperAPI, ни прокси, ни авторизация не нужны.
+
+**Endpoint** (найден в DevTools → Network → Fetch/XHR на `copart.com/lotSearchResults`):
+
+```
+POST https://www.copart.com/public/lots/search-results
+Content-Type: application/json
+
+{"query":["*"],"filter":{"MAKE":["lot_make_desc:\"CHEVROLET\""]},
+ "sort":["auction_date_type asc"],"page":0,"size":100,"start":0,
+ "freeFormSearch":false,"hideImages":true,"backPage":"search"}
+```
+
+Группы фильтров берутся из `facetFields` того же ответа:
+
+| Группа | Выражение | Поле фильтра бота |
+|--------|-----------|-------------------|
+| `MAKE` | `lot_make_desc:"CHEVROLET"` | марка |
+| `MODL` | `lot_model_desc:"CRUZE"` | модель |
+| `YEAR` | `lot_year:[2015 TO 2020]` | год от/до |
+| `ODM`  | `odometer_reading_received:[0 TO 150000]` | пробег от/до |
+| `SDAT` | `auction_date_utc:[NOW TO NOW+7DAY]` | аукцион с/по |
+
+Особенности:
+
+- **Цена** — `la`, оценочная стоимость в **долларах** (у канадских лотов — CAD).
+  Текущие ставки в поиске всегда `0` — они видны только авторизованным.
+  Границы цены в фильтре задаются в рублях и пересчитываются по `USD_RUB_RATE`.
+- **Пробег** — `orr`, в **милях**.
+- **Город** — площадка хранения (`yn`), например `FL - JACKSONVILLE NORTH`.
+- **Дата аукциона** — `ad`; у лотов со статусом Future её нет, поле остаётся пустым.
+- Названия моделей у Copart свои. Если точное совпадение по `lot_model_desc`
+  ничего не дало, парсер ищет по марке и отсеивает по заголовку лота.
+- Марок LADA / SKODA / RENAULT / GEELY / CHERY на аукционе нет — запрос не отправляется.
+
+Источник `copart` не входит в `sources` по умолчанию — его нужно выбрать явно
+в фильтре (кнопка «🟡 Copart» или «🌍 Всё вместе»).
+
+### Миграция БД
+
+Новые колонки применяются автоматически при старте (`db/repository.py`),
+либо вручную в SQL-редакторе Neon:
+
+```sql
+ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS damage_description TEXT;
+ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS auction_date       TIMESTAMPTZ;
+ALTER TABLE favorites     ADD COLUMN IF NOT EXISTS damage_description TEXT;
+ALTER TABLE favorites     ADD COLUMN IF NOT EXISTS auction_date       TIMESTAMPTZ;
+ALTER TABLE filters       ADD COLUMN IF NOT EXISTS auction_date_from  DATE;
+ALTER TABLE filters       ADD COLUMN IF NOT EXISTS auction_date_to    DATE;
+```
 
 ## Команды бота
 

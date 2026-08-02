@@ -1,3 +1,4 @@
+import datetime
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional
@@ -16,6 +17,10 @@ class Listing:
     transmission: Optional[str] = None
     body_type: Optional[str] = None
     filter_name: Optional[str] = None
+    # ── Поля аукционов (Copart) ───────────────────────────────────────────────
+    damage_description: Optional[str] = None            # «FRONT END», «REAR END», …
+    auction_date: Optional[datetime.datetime] = None    # дата и время торгов (UTC)
+    currency: Optional[str] = None                      # USD / CAD — валюта лота
 
 
 @dataclass
@@ -36,9 +41,19 @@ class SearchFilter:
     transmission: Optional[str] = None
     body_type: Optional[str] = None
     sources: list[str] = field(default_factory=lambda: ["autoru", "drom"])
+    # Диапазон даты аукциона — используется только источником copart
+    auction_date_from: Optional[datetime.date] = None
+    auction_date_to: Optional[datetime.date] = None
 
     @classmethod
     def from_record(cls, record) -> "SearchFilter":
+        # Колонки auction_date_* появились позже — на неразмигрированной БД их нет
+        def opt(key):
+            try:
+                return record[key]
+            except (KeyError, IndexError):
+                return None
+
         return cls(
             id=record["id"],
             user_id=record["user_id"],
@@ -56,6 +71,8 @@ class SearchFilter:
             transmission=record["transmission"],
             body_type=record["body_type"],
             sources=list(record["sources"] or ["autoru", "drom"]),
+            auction_date_from=opt("auction_date_from"),
+            auction_date_to=opt("auction_date_to"),
         )
 
 

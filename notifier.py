@@ -6,8 +6,9 @@ from aiogram.enums import ParseMode
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 import datetime
-from config import OWNER_ID
+from config import OWNER_ID, USD_RUB_RATE
 from parsers.base import Listing
+from parsers.copart import damage_ru
 from db.repository import mark_seen, record_price, get_notification_settings
 
 logger = logging.getLogger(__name__)
@@ -17,6 +18,8 @@ SEND_DELAY = 0.5
 SOURCE_BADGE = {
     "autoru": "🔵 Auto.ru",
     "drom":   "🟠 Дром.ру",
+    "avito":  "🟢 Авито",
+    "copart": "🟡 Copart",
 }
 
 TRANSMISSION_RU = {
@@ -37,6 +40,32 @@ BODY_RU = {
     "PICKUP":   "Пикап",
     "VAN":      "Фургон",
 }
+
+
+THIN_SPACE = " "
+CURRENCY_SIGN = {"USD": "$", "CAD": "CA$"}
+
+
+def _fmt_amount(value: Optional[int], currency: Optional[str]) -> str:
+    """Оценочная стоимость лота Copart в валюте торгов."""
+    if not value:
+        return "оценка не указана"
+    sign = CURRENCY_SIGN.get(currency or "USD", f"{currency} ")
+    return sign + f"{value:,}".replace(",", THIN_SPACE)
+
+
+def _fmt_miles(value: Optional[int]) -> str:
+    """Одометр Copart — в милях."""
+    if not value:
+        return ""
+    return f"{value:,}".replace(",", THIN_SPACE) + " миль"
+
+
+def _fmt_auction_date(value) -> str:
+    """Дата торгов в московском времени."""
+    if not value:
+        return ""
+    return (value + datetime.timedelta(hours=3)).strftime("%d.%m.%Y в %H:%M МСК")
 
 
 def _fmt_price(price: Optional[int]) -> str:
@@ -64,15 +93,18 @@ def _fmt_body(value: Optional[str]) -> str:
 
 
 def _build_message(listing: Listing) -> str:
-    badge   = SOURCE_BADGE.get(listing.source, listing.source)
-    price   = _fmt_price(listing.price)
+    badge     = SOURCE_BADGE.get(listing.source, listing.source)
+    is_copart = listing.source == "copart"
+    price     = (_fmt_amount(listing.price, listing.currency) if is_copart
+                 else _fmt_price(listing.price))
 
     # ── Строка характеристик ──────────────────────────────────────────────────
     specs: list[str] = []
     if listing.year:
         specs.append(f"{listing.year} г.")
     if listing.mileage:
-        specs.append(_fmt_mileage(listing.mileage))
+        specs.append(_fmt_miles(listing.mileage) if is_copart
+                     else _fmt_mileage(listing.mileage))
     tr = _fmt_transmission(listing.transmission)
     if tr:
         specs.append(tr)
@@ -90,16 +122,30 @@ def _build_message(listing: Listing) -> str:
     # Название
     lines.append(f"<b>{listing.title}</b>")
 
+    # Номер лота — по нему ищут на самом аукционе
+    if is_copart:
+        lines.append(f"<code>Лот {listing.external_id}</code>")
+
     # Цена — главный акцент
-    lines.append(f"\n<b>💰 {price}</b>")
+    label = "💰 Оценка:" if is_copart else "💰"
+    lines.append(f"\n<b>{label} {price}</b>")
 
     # Характеристики
     if specs:
         lines.append("📋 " + "  ·  ".join(specs))
 
-    # Город
+    # Повреждения и дата торгов
+    if is_copart:
+        if listing.damage_description:
+            lines.append(f"💥 Повреждение: {damage_ru(listing.damage_description)}")
+        auction = _fmt_auction_date(listing.auction_date)
+        if auction:
+            lines.append(f"🗓 Аукцион: {auction}")
+
+    # Город (для Copart — площадка хранения)
     if listing.city:
-        lines.append(f"📍 {listing.city}")
+        icon = "🏁" if is_copart else "📍"
+        lines.append(f"{icon} {listing.city}")
 
     # Фильтр
     if listing.filter_name:
@@ -112,10 +158,11 @@ def _build_keyboard(listing: Listing) -> InlineKeyboardMarkup:
     """Кнопки прямо под объявлением."""
     # callback_data ограничен 64 байтами — берём только первые 20 символов external_id
     short_id = listing.external_id[:20]
+    open_text = "🔗 Открыть лот" if listing.source == "copart" else "🔗 Открыть объявление"
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
-                text="🔗 Открыть объявление",
+                text=open_text,
                 url=listing.url,
             ),
         ],
@@ -166,9 +213,12 @@ async def process_listings(
     threshold = settings.get("price_threshold")
 
     for listing in listings:
-        # Проверяем порог цены
-        if threshold and listing.price and listing.price > threshold:
-            continue
+        # Проверяем порог цены. Порог задаётся в рублях, а лоты Copart —
+        # в долларах, поэтому приводим порог к валюте лота.
+        if threshold and listing.price:
+            limit = threshold / USD_RUB_RATE if listing.source == "copart" else threshold
+            if listing.price > limit:
+                continue
 
         is_new = await mark_seen(
             source=listing.source,
@@ -180,6 +230,8 @@ async def process_listings(
             mileage=listing.mileage,
             city=listing.city,
             transmission=listing.transmission,
+            damage_description=listing.damage_description,
+            auction_date=listing.auction_date,
         )
 
         # Записываем цену в историю
@@ -221,13 +273,25 @@ async def process_price_drops(
         if old_price and old_price > listing.price:
             drop = old_price - listing.price
             pct  = round(drop / old_price * 100)
-            text = (
-                f"📉 <b>Цена снижена!</b>\n"
-                f"{listing.title}\n\n"
-                f"Было: <s>{old_price:,} ₽</s>\n"
-                f"Стало: <b>{listing.price:,} ₽</b> (-{drop:,} ₽ / -{pct}%)\n\n"
-                f'<a href="{listing.url}">Открыть →</a>'
-            ).replace(",", "\u2009")
+            if listing.source == "copart":
+                was  = _fmt_amount(old_price, listing.currency)
+                now  = _fmt_amount(listing.price, listing.currency)
+                diff = _fmt_amount(drop, listing.currency)
+                text = (
+                    f"📉 <b>Оценка снижена!</b>\n"
+                    f"{listing.title}\n\n"
+                    f"Было: <s>{was}</s>\n"
+                    f"Стало: <b>{now}</b> (-{diff} / -{pct}%)\n\n"
+                    f'<a href="{listing.url}">Открыть лот →</a>'
+                )
+            else:
+                text = (
+                    f"📉 <b>Цена снижена!</b>\n"
+                    f"{listing.title}\n\n"
+                    f"Было: <s>{old_price:,} ₽</s>\n"
+                    f"Стало: <b>{listing.price:,} ₽</b> (-{drop:,} ₽ / -{pct}%)\n\n"
+                    f'<a href="{listing.url}">Открыть →</a>'
+                ).replace(",", "\u2009")
             try:
                 await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
             except Exception as e:

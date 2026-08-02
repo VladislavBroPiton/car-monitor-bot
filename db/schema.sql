@@ -15,6 +15,9 @@ CREATE TABLE IF NOT EXISTS filters (
     transmission TEXT,
     body_type    TEXT,
     sources      TEXT[] DEFAULT ARRAY['autoru', 'drom'],
+    -- Диапазон даты аукциона, используется только источником copart
+    auction_date_from DATE,
+    auction_date_to   DATE,
     is_active    BOOLEAN DEFAULT TRUE,
     created_at   TIMESTAMPTZ DEFAULT NOW()
 );
@@ -30,6 +33,9 @@ CREATE TABLE IF NOT EXISTS seen_listings (
     mileage     INTEGER,
     city        TEXT,
     transmission TEXT,
+    -- Поля аукционов (copart)
+    damage_description TEXT,
+    auction_date       TIMESTAMPTZ,
     created_at  TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE (source, external_id)
 );
@@ -75,6 +81,20 @@ CREATE TABLE IF NOT EXISTS price_history (
 );
 CREATE INDEX IF NOT EXISTS idx_price_history_listing
     ON price_history (source, external_id, recorded_at DESC);
+
+-- ── Миграции для уже созданных БД ────────────────────────────────────────────
+-- CREATE TABLE IF NOT EXISTS выше не добавляет колонки в существующие таблицы,
+-- поэтому дублируем их отдельно. Те же запросы выполняются автоматически
+-- при старте приложения (db/repository.py → _apply_migrations).
+ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS damage_description TEXT;
+ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS auction_date       TIMESTAMPTZ;
+ALTER TABLE favorites     ADD COLUMN IF NOT EXISTS damage_description TEXT;
+ALTER TABLE favorites     ADD COLUMN IF NOT EXISTS auction_date       TIMESTAMPTZ;
+ALTER TABLE filters       ADD COLUMN IF NOT EXISTS auction_date_from  DATE;
+ALTER TABLE filters       ADD COLUMN IF NOT EXISTS auction_date_to    DATE;
+
+CREATE INDEX IF NOT EXISTS idx_seen_listings_auction_date
+    ON seen_listings (auction_date);
 
 CREATE TABLE IF NOT EXISTS notification_settings (
     user_id         BIGINT PRIMARY KEY,

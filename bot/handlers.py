@@ -1,3 +1,4 @@
+import datetime
 import logging
 from typing import Optional
 from aiogram import Router, F
@@ -21,6 +22,7 @@ from db.repository import (
     update_filter_field,
     get_pool,
 )
+from parsers.copart import damage_ru
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -66,6 +68,25 @@ def _parse_int_or_none(text: str):
         return False
 
 
+def _opt(record, key):
+    """Значение колонки, которой может не быть на неразмигрированной БД."""
+    try:
+        return record[key]
+    except (KeyError, IndexError):
+        return None
+
+
+def _parse_date_or_none(text: str):
+    """«2026-09-01» → date, «-» → None, мусор → False."""
+    text = text.strip()
+    if text in ("-", "нет", "skip", ""):
+        return None
+    try:
+        return datetime.date.fromisoformat(text)
+    except ValueError:
+        return False
+
+
 def _fmt_price(v: Optional[int]) -> str:
     if not v:
         return "—"
@@ -97,7 +118,38 @@ SOURCE_LABELS = {
     "autoru": "🔵 Auto.ru",
     "drom":   "🟠 Дром",
     "avito":  "🟢 Авито",
+    "copart": "🟡 Copart",
 }
+
+# Наборы источников для кнопок выбора (в боте и в FSM создания фильтра)
+SOURCE_SETS = {
+    "all":    ["autoru", "drom", "avito"],
+    "both":   ["autoru", "drom"],
+    "autoru": ["autoru"],
+    "drom":   ["drom"],
+    "avito":  ["avito"],
+    "copart": ["copart"],
+    "every":  ["autoru", "drom", "avito", "copart"],
+}
+
+
+def _sources_kb(prefix: str, cancel_row: list = None) -> InlineKeyboardMarkup:
+    """Клавиатура выбора источников. prefix — «fsm_src» или «edit_val»."""
+    rows = [
+        [InlineKeyboardButton(text="🔵+🟠+🟢 Все российские", callback_data=f"{prefix}:all")],
+        [
+            InlineKeyboardButton(text="🔵 Auto.ru", callback_data=f"{prefix}:autoru"),
+            InlineKeyboardButton(text="🟢 Авито",   callback_data=f"{prefix}:avito"),
+        ],
+        [
+            InlineKeyboardButton(text="🟠 Дром",    callback_data=f"{prefix}:drom"),
+            InlineKeyboardButton(text="🟡 Copart",  callback_data=f"{prefix}:copart"),
+        ],
+        [InlineKeyboardButton(text="🌍 Всё вместе", callback_data=f"{prefix}:every")],
+    ]
+    if cancel_row:
+        rows.append(cancel_row)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 CATALOG: dict[str, list[str]] = {
     "CHEVROLET": ["CRUZE", "CAPTIVA", "ORLANDO", "AVEO", "LACETTI", "NIVA"],
@@ -229,6 +281,7 @@ def _main_menu_kb() -> InlineKeyboardMarkup:
         )],
         [InlineKeyboardButton(text="📋 Мои фильтры",   callback_data="filters_list:0")],
         [InlineKeyboardButton(text="➕ Новый фильтр",  callback_data="filter_add")],
+        [InlineKeyboardButton(text="🟡 Copart",        callback_data="copart_lots:0")],
         [InlineKeyboardButton(text="📊 Статистика",    callback_data="show_status")],
     ])
 
@@ -301,6 +354,8 @@ def _edit_menu_kb(filter_id: int) -> InlineKeyboardMarkup:
         ("📍 Города",      "cities"),
         ("⚙️ КПП",         "transmission"),
         ("🚘 Кузов",       "body_type"),
+        ("🗓 Аукцион с",   "auction_date_from"),
+        ("🗓 Аукцион по",  "auction_date_to"),
         ("📡 Источники",   "sources"),
     ]
     rows = []
@@ -433,6 +488,10 @@ def _render_filter(f) -> str:
     if f["body_type"]:
         bt = BODY_LABELS.get(f["body_type"], f["body_type"])
         lines.append(f"🚘 <b>Кузов:</b>  {bt}")
+
+    af, at = _opt(f, "auction_date_from"), _opt(f, "auction_date_to")
+    if af or at:
+        lines.append(f"🗓 <b>Аукцион:</b>  {af or '—'} – {at or '—'}")
 
     lines.append(f"<code>{'─' * 24}</code>")
     lines.append(f"📡 {srcs}")
@@ -759,15 +818,11 @@ async def cb_edit_field(call: CallbackQuery, state: FSMContext):
     elif field == "sources":
         await call.message.edit_text(
             "📡 Выбери источники:",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔵+🟠+🟢 Все три", callback_data="edit_val:all")],
-                [
-                    InlineKeyboardButton(text="🔵 Auto.ru", callback_data="edit_val:autoru"),
-                    InlineKeyboardButton(text="🟢 Авито",   callback_data="edit_val:avito"),
-                ],
-                [InlineKeyboardButton(text="🟠 Дром",       callback_data="edit_val:drom")],
-                [InlineKeyboardButton(text="◀️ Отмена", callback_data=f"filter_edit:{filter_id}")],
-            ]),
+            reply_markup=_sources_kb(
+                "edit_val",
+                [InlineKeyboardButton(text="◀️ Отмена",
+                                      callback_data=f"filter_edit:{filter_id}")],
+            ),
         )
     elif field == "cities":
         current = list(f["cities"] or [])
@@ -789,6 +844,12 @@ async def cb_edit_field(call: CallbackQuery, state: FSMContext):
             "price_to": "💰 Цена до в ₽ (число или «-»)",
             "mileage_from": "🛣 Пробег от в км (число или «-»)",
             "mileage_to": "🛣 Пробег до в км (число или «-»)",
+            "auction_date_from": "🗓 Аукцион не раньше — дата в формате "
+                                 "<code>ГГГГ-ММ-ДД</code> (или «-»)\n"
+                                 "<i>Только для Copart</i>",
+            "auction_date_to":   "🗓 Аукцион не позже — дата в формате "
+                                 "<code>ГГГГ-ММ-ДД</code> (или «-»)\n"
+                                 "<i>Только для Copart</i>",
         }
         hint = labels.get(field, f"Введи новое значение для «{field}»")
         current_val = f[field]
@@ -813,13 +874,7 @@ async def cb_edit_val(call: CallbackQuery, state: FSMContext):
     if val_raw == "NONE":
         value = None
     elif field == "sources":
-        value = {
-            "all":    ["autoru", "drom", "avito"],
-            "both":   ["autoru", "drom"],
-            "autoru": ["autoru"],
-            "drom":   ["drom"],
-            "avito":  ["avito"],
-        }[val_raw]
+        value = SOURCE_SETS[val_raw]
     elif field == "brand":
         value = val_raw if val_raw != "-" else None
         # Сбрасываем модель при смене марки
@@ -847,11 +902,18 @@ async def fsm_edit_text(message: Message, state: FSMContext):
     raw       = message.text.strip()
 
     int_fields = {"year_from", "year_to", "price_from", "price_to", "mileage_from", "mileage_to"}
+    date_fields = {"auction_date_from", "auction_date_to"}
 
     if field in int_fields:
         value = _parse_int_or_none(raw)
         if value is False:
             await message.answer("⚠️ Введи число или «-»")
+            return
+    elif field in date_fields:
+        value = _parse_date_or_none(raw)
+        if value is False:
+            await message.answer("⚠️ Введи дату в формате ГГГГ-ММ-ДД, например "
+                                 "<code>2026-09-01</code>, или «-»", parse_mode="HTML")
             return
     elif raw == "-":
         value = None
@@ -1261,16 +1323,11 @@ async def cb_fsm_body(call: CallbackQuery, state: FSMContext):
     await state.update_data(body_type=None if val == "-" else val)
     await state.set_state(FilterForm.sources)
     await call.message.edit_text(
-        _step(13, 13, "Шаг 13 — Источники", "Где искать?"),
+        _step(13, 13, "Шаг 13 — Источники",
+              "Где искать?\n<i>🟡 Copart — аукцион битых авто из США, "
+              "цены в долларах</i>"),
         parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔵+🟠+🟢 Все три", callback_data="fsm_src:all")],
-            [
-                InlineKeyboardButton(text="🔵 Auto.ru", callback_data="fsm_src:autoru"),
-                InlineKeyboardButton(text="🟢 Авито",   callback_data="fsm_src:avito"),
-            ],
-            [InlineKeyboardButton(text="🟠 Дром",       callback_data="fsm_src:drom")],
-        ]),
+        reply_markup=_sources_kb("fsm_src"),
     )
     await call.answer()
 
@@ -1288,13 +1345,7 @@ async def fsm_body_text(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("fsm_src:"))
 async def cb_fsm_sources(call: CallbackQuery, state: FSMContext):
     val = call.data.split(":")[1]
-    sources = {
-        "autoru": ["autoru"],
-        "drom":   ["drom"],
-        "avito":  ["avito"],
-        "both":   ["autoru", "drom"],
-        "all":    ["autoru", "drom", "avito"],
-    }[val]
+    sources = SOURCE_SETS[val]
     await _finish_filter(call.message, state, sources, from_call=True)
     await call.answer()
 
@@ -1302,11 +1353,14 @@ async def cb_fsm_sources(call: CallbackQuery, state: FSMContext):
 @router.message(StateFilter(FilterForm.sources))
 async def fsm_sources_text(message: Message, state: FSMContext):
     val = message.text.strip().lower()
+    known = set(SOURCE_LABELS)
     sources = ["autoru", "drom"] if val == "-" else [
-        s.strip() for s in val.split(",") if s.strip() in {"autoru", "drom"}
+        s.strip() for s in val.split(",") if s.strip() in known
     ]
     if not sources:
-        await message.answer("⚠️ Укажи хотя бы один источник")
+        await message.answer(
+            "⚠️ Укажи хотя бы один источник: autoru, drom, avito, copart"
+        )
         return
     await _finish_filter(message, state, sources, from_call=False)
 
@@ -1350,6 +1404,104 @@ async def _finish_filter(msg, state: FSMContext, sources: list, from_call: bool)
         await msg.edit_text(text, parse_mode="HTML", reply_markup=kb)
     else:
         await msg.answer(text, parse_mode="HTML", reply_markup=kb)
+
+
+# ── Copart ────────────────────────────────────────────────────────────────────
+
+COPART_PAGE_SIZE = 5
+
+
+def _fmt_usd(v: Optional[int]) -> str:
+    if not v:
+        return "оценка не указана"
+    return "$" + f"{v:,}".replace(",", " ")
+
+
+def _render_copart_lot(row) -> str:
+    """Одна карточка лота для списка в чате."""
+    parts = [f"🟡 <b>{row['title'] or 'Лот'}</b>"]
+    parts.append(f"<code>Лот {row['external_id']}</code> · {_fmt_usd(row['price'])}")
+
+    specs = []
+    if row["year"]:
+        specs.append(f"{row['year']} г.")
+    if row["mileage"]:
+        specs.append(f"{row['mileage']:,}".replace(",", " ") + " миль")
+    if specs:
+        parts.append("📋 " + "  ·  ".join(specs))
+
+    damage = _opt(row, "damage_description")
+    if damage:
+        parts.append(f"💥 {damage_ru(damage)}")
+
+    auction = _opt(row, "auction_date")
+    if auction:
+        moscow = auction + datetime.timedelta(hours=3)
+        parts.append(f"🗓 {moscow.strftime('%d.%m.%Y в %H:%M МСК')}")
+
+    if row["city"]:
+        parts.append(f"🏁 {row['city']}")
+
+    parts.append(f'<a href="{row["url"]}">Открыть лот →</a>')
+    return "\n".join(parts)
+
+
+@router.callback_query(F.data.startswith("copart_lots:"))
+async def cb_copart_lots(call: CallbackQuery):
+    if not _is_owner(call.from_user.id):
+        await call.answer("⛔", show_alert=True)
+        return
+
+    page = int(call.data.split(":")[1])
+    pool = await get_pool()
+
+    total = await pool.fetchval(
+        "SELECT COUNT(*) FROM seen_listings WHERE source = 'copart'"
+    )
+    rows = await pool.fetch(
+        """SELECT * FROM seen_listings
+           WHERE source = 'copart'
+           ORDER BY created_at DESC
+           LIMIT $1 OFFSET $2""",
+        COPART_PAGE_SIZE, page * COPART_PAGE_SIZE,
+    )
+
+    if not total:
+        await call.message.edit_text(
+            "🟡 <b>Copart</b>\n\n"
+            "Лотов пока нет.\n\n"
+            "Добавь источник <b>Copart</b> в фильтр — и лоты появятся "
+            "после ближайшего обхода.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📋 Мои фильтры", callback_data="filters_list:0")],
+                [InlineKeyboardButton(text="🏠 Меню",        callback_data="main_menu")],
+            ]),
+        )
+        await call.answer()
+        return
+
+    pages = (total + COPART_PAGE_SIZE - 1) // COPART_PAGE_SIZE
+    header = f"🟡 <b>Copart</b> — {total} лотов\n<code>{'─' * 24}</code>"
+    body = "\n\n".join(_render_copart_lot(r) for r in rows)
+
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"copart_lots:{page-1}"))
+    nav.append(InlineKeyboardButton(text=f"{page+1}/{pages}", callback_data="noop"))
+    if page < pages - 1:
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"copart_lots:{page+1}"))
+
+    await call.message.edit_text(
+        f"{header}\n\n{body}",
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            nav,
+            [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
+        ]),
+    )
+    await call.answer()
 
 
 # ── Избранное / скрыть ────────────────────────────────────────────────────────

@@ -110,6 +110,55 @@ async def api_listings(page: int = 1, source: str = "", limit: int = 20):
         raise
 
 
+# ── Copart ────────────────────────────────────────────────────────────────────
+
+@router.get("/copart/listings")
+async def api_copart_listings(page: int = 1, limit: int = 20, sort: str = "date"):
+    """
+    Лоты аукциона Copart. Цены — в долларах (валюта торгов),
+    пробег — в милях, auction_date — дата ближайших торгов.
+    """
+    pool = await get_pool()
+    offset = (page - 1) * limit
+
+    order = {
+        "date":         "created_at DESC",
+        "price_asc":    "price ASC NULLS LAST",
+        "price_desc":   "price DESC NULLS LAST",
+        "year_desc":    "year DESC NULLS LAST",
+        "mileage_asc":  "mileage ASC NULLS LAST",
+        "auction_soon": "auction_date ASC NULLS LAST",
+    }.get(sort, "created_at DESC")
+
+    try:
+        rows = await pool.fetch(
+            f"""SELECT * FROM seen_listings
+                WHERE source = 'copart'
+                ORDER BY {order} LIMIT $1 OFFSET $2""",
+            limit, offset,
+        )
+        total = await pool.fetchval(
+            "SELECT COUNT(*) FROM seen_listings WHERE source = 'copart'"
+        )
+    except Exception as e:
+        logger.error(f"api_copart_listings error: {e}")
+        raise
+
+    def row_to_dict(r):
+        d = dict(r)
+        for key in ("created_at", "auction_date"):
+            if d.get(key):
+                d[key] = str(d[key])
+        return d
+
+    return {
+        "items": [row_to_dict(r) for r in rows],
+        "total": total,
+        "page":  page,
+        "pages": max(1, (total + limit - 1) // limit),
+    }
+
+
 # ── Filters ───────────────────────────────────────────────────────────────────
 
 @router.get("/filters")
@@ -130,6 +179,8 @@ async def api_filters():
         "transmission": f["transmission"],
         "body_type":    f["body_type"],
         "sources":      list(f["sources"] or []),
+        "auction_date_from": str(f["auction_date_from"]) if f["auction_date_from"] else None,
+        "auction_date_to":   str(f["auction_date_to"])   if f["auction_date_to"]   else None,
         "is_active":    f["is_active"],
     } for f in filters]
 
