@@ -1781,15 +1781,49 @@ async def _finish_filter(msg, state: FSMContext, sources: list, from_call: bool)
 
 # ── Мастер фильтра Copart ─────────────────────────────────────────────────────
 
-def _cp_step(n: int, title: str, hint: str) -> str:
+def _cp_step(n: int, title: str, hint: str, typed: bool = True) -> str:
+    """typed=False — шаг только с кнопками, подсказка про «-» там лишняя."""
     bar = "▓" * n + "░" * (COPART_STEPS - n)
+    skip = "<i>«-» — пропустить</i>\n" if typed else ""
     return (
         f"🟡 <b>Новый фильтр Copart</b>\n"
         f"<b>{title}</b>\n"
         f"<code>{bar}</code>  {n}/{COPART_STEPS}\n"
-        f"<i>«-» — пропустить</i>\n\n"
+        f"{skip}\n"
         f"{hint}"
     )
+
+
+# Последний шаг мастера. Оба ограничения неочевидны, поэтому объясняем
+# их прямо в сообщении, а не прячем в справку.
+COPART_OPTIONS_HINT = (
+    "Два необязательных ограничения. Если сомневаешься — "
+    "жми <b>«Присылать все»</b>.\n\n"
+
+    "🚀 <b>На ходу</b>\n"
+    "Аукцион проверяет часть машин и ставит отметку «заводится и едет своим "
+    "ходом». У остальных двигатель может не запускаться вовсе — только "
+    "на эвакуаторе.\n\n"
+
+    "⚡️ <b>Купить сразу</b>\n"
+    "Обычно лот уходит с торгов: ставки, конкуренция, цена заранее неизвестна. "
+    "У части лотов есть фиксированная цена — можно забрать без аукциона."
+)
+
+
+def _cpw_options_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚀 Только те, что на ходу",
+                              callback_data="cpw_opt:rnd")],
+        [InlineKeyboardButton(text="⚡️ Только с фиксированной ценой",
+                              callback_data="cpw_opt:buy")],
+        [InlineKeyboardButton(text="🚀+⚡️ На ходу и с фиксированной ценой",
+                              callback_data="cpw_opt:both")],
+        [InlineKeyboardButton(text="✅ Присылать все — без ограничений",
+                              callback_data="cpw_opt:none")],
+        [InlineKeyboardButton(text="🔎 Сначала посмотреть, что найдётся",
+                              callback_data="cpw_check")],
+    ])
 
 
 def _cp_multi_kb(options: list[tuple[str, str]], selected: list[str],
@@ -2079,7 +2113,7 @@ async def cpw_mileage_to(message: Message, state: FSMContext):
         _cp_step(9, "Шаг 9 — Тип документа",
                  "Отметь подходящие. Ничего не отмечено — берём любые.\n\n"
                  "<i>Документ определяет, можно ли машину восстановить "
-                 "и поставить на учёт.</i>"),
+                 "и поставить на учёт.</i>", typed=False),
         parse_mode="HTML",
         reply_markup=_cp_multi_kb(options, [], per_row=1),
     )
@@ -2148,7 +2182,7 @@ async def cpw_advance(call: CallbackQuery, state: FSMContext):
             _cp_step(10, "Шаг 10 — Исключить повреждения",
                      "Отмеченные типы <b>не попадут</b> в выдачу.\n\n"
                      "<i>Горелые, утопленники и химия обычно не подлежат "
-                     "восстановлению.</i>"),
+                     "восстановлению.</i>", typed=False),
             parse_mode="HTML",
             reply_markup=_cp_multi_kb(
                 options, [], 2, [("🗑 Отметить пожары, потоп и химию", "cpw_preset_junk")]),
@@ -2161,7 +2195,7 @@ async def cpw_advance(call: CallbackQuery, state: FSMContext):
             _cp_step(11, "Шаг 11 — Площадки",
                      "Отметь штаты и провинции. Ничего не отмечено — вся страна.\n\n"
                      "<i>Чем ближе площадка к порту вывоза, "
-                     "тем дешевле доставка.</i>"),
+                     "тем дешевле доставка.</i>", typed=False),
             parse_mode="HTML",
             reply_markup=_cp_multi_kb([(s, s) for s in YARD_STATES], [], 5),
         )
@@ -2170,20 +2204,10 @@ async def cpw_advance(call: CallbackQuery, state: FSMContext):
         await state.update_data(yards=sel)
         await state.set_state(CopartForm.options)
         await call.message.edit_text(
-            _cp_step(12, "Шаг 12 — Дополнительно", "Последний шаг:"),
+            _cp_step(12, "Шаг 12 — Состояние и способ покупки", COPART_OPTIONS_HINT,
+                 typed=False),
             parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🚀 Только на ходу",
-                                      callback_data="cpw_opt:rnd")],
-                [InlineKeyboardButton(text="⚡️ Только «купить сразу»",
-                                      callback_data="cpw_opt:buy")],
-                [InlineKeyboardButton(text="🚀+⚡️ И то, и другое",
-                                      callback_data="cpw_opt:both")],
-                [InlineKeyboardButton(text="⏭ Без ограничений",
-                                      callback_data="cpw_opt:none")],
-                [InlineKeyboardButton(text="🔎 Проверить, что найдётся",
-                                      callback_data="cpw_check")],
-            ]),
+            reply_markup=_cpw_options_kb(),
         )
     await call.answer()
 
@@ -2272,15 +2296,10 @@ async def cpw_check(call: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "cpw_back_opts", StateFilter(CopartForm.options))
 async def cpw_back_opts(call: CallbackQuery, state: FSMContext):
     await call.message.answer(
-        _cp_step(12, "Шаг 12 — Дополнительно", "Последний шаг:"),
+        _cp_step(12, "Шаг 12 — Состояние и способ покупки", COPART_OPTIONS_HINT,
+                 typed=False),
         parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🚀 Только на ходу", callback_data="cpw_opt:rnd")],
-            [InlineKeyboardButton(text="⚡️ Только «купить сразу»", callback_data="cpw_opt:buy")],
-            [InlineKeyboardButton(text="🚀+⚡️ И то, и другое", callback_data="cpw_opt:both")],
-            [InlineKeyboardButton(text="⏭ Без ограничений", callback_data="cpw_opt:none")],
-            [InlineKeyboardButton(text="🔎 Проверить, что найдётся", callback_data="cpw_check")],
-        ]),
+        reply_markup=_cpw_options_kb(),
     )
     await call.answer()
 
