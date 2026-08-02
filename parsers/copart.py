@@ -132,6 +132,16 @@ def _make_values(brand: str) -> list[str]:
     return MAKE_MAP.get(key, [key])
 
 
+KM_IN_MILE = 1.60934
+
+
+def _km_to_miles(km: Optional[int]) -> Optional[int]:
+    """Границы пробега из фильтра (км) → мили, как их хранит Copart."""
+    if not km:
+        return None
+    return int(km / KM_IN_MILE)
+
+
 def _solr_range(lo, hi) -> str:
     """Диапазон Solr: [2015 TO 2020], [2015 TO *], [* TO 2020]."""
     return f"[{lo if lo is not None else '*'} TO {hi if hi is not None else '*'}]"
@@ -158,9 +168,11 @@ def _build_filter(f: SearchFilter, with_model: bool = True) -> dict:
     if f.year_from or f.year_to:
         flt["YEAR"] = [f"lot_year:{_solr_range(f.year_from, f.year_to)}"]
 
+    # Пробег в фильтре задаётся в километрах, одометр Copart — в милях
     if f.mileage_from or f.mileage_to:
         flt["ODM"] = [
-            f"odometer_reading_received:{_solr_range(f.mileage_from, f.mileage_to)}"
+            f"odometer_reading_received:"
+            f"{_solr_range(_km_to_miles(f.mileage_from), _km_to_miles(f.mileage_to))}"
         ]
 
     date_expr = _date_range(f)
