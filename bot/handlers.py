@@ -22,7 +22,15 @@ from db.repository import (
     update_filter_field,
     get_pool,
 )
-from parsers.copart import damage_ru
+from parsers.copart import (
+    damage_ru,
+    title_ru,
+    keys_ru,
+    TITLE_GROUPS,
+    DAMAGE_CODES,
+    DAMAGE_JUNK,
+    YARD_STATES,
+)
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -354,26 +362,102 @@ def _edit_menu_kb(filter_id: int) -> InlineKeyboardMarkup:
         ("📍 Города",      "cities"),
         ("⚙️ КПП",         "transmission"),
         ("🚘 Кузов",       "body_type"),
-        ("🗓 Аукцион с",   "auction_date_from"),
-        ("🗓 Аукцион по",  "auction_date_to"),
         ("📡 Источники",   "sources"),
     ]
-    rows = []
-    for i in range(0, len(fields), 2):
-        row = [
-            InlineKeyboardButton(
-                text=fields[i][0],
-                callback_data=f"edit_field:{filter_id}:{fields[i][1]}"
-            )
-        ]
-        if i + 1 < len(fields):
-            row.append(InlineKeyboardButton(
-                text=fields[i+1][0],
-                callback_data=f"edit_field:{filter_id}:{fields[i+1][1]}"
-            ))
-        rows.append(row)
+    # Поля, которые работают только с Copart
+    copart_fields = [
+        ("🗓 Аукцион с",   "auction_date_from"),
+        ("🗓 Аукцион по",  "auction_date_to"),
+        ("📄 Документ",    "title_groups"),
+        ("💥 Исключить",   "damage_exclude"),
+        ("🏁 Площадки",    "yards"),
+        ("🚀 На ходу",     "run_and_drive"),
+        ("⚡️ Купить сразу", "buy_now_only"),
+    ]
+    def pairs(items: list) -> list:
+        out = []
+        for i in range(0, len(items), 2):
+            row = [InlineKeyboardButton(
+                text=items[i][0],
+                callback_data=f"edit_field:{filter_id}:{items[i][1]}",
+            )]
+            if i + 1 < len(items):
+                row.append(InlineKeyboardButton(
+                    text=items[i + 1][0],
+                    callback_data=f"edit_field:{filter_id}:{items[i + 1][1]}",
+                ))
+            out.append(row)
+        return out
+
+    rows = pairs(fields)
+    rows.append([InlineKeyboardButton(text="— 🟡 только Copart —", callback_data="noop")])
+    rows += pairs(copart_fields)
     rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data=f"filter_info:{filter_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+# ── Множественный выбор для полей Copart ──────────────────────────────────────
+
+def _multi_kb(field: str, options: list[tuple[str, str]], selected: list[str],
+              filter_id: int, per_row: int = 2, presets: list = None) -> InlineKeyboardMarkup:
+    """
+    Клавиатура «отметь галочками». options — список (код, подпись).
+    presets — быстрые наборы: список (подпись, callback_data).
+    """
+    rows = []
+    for i in range(0, len(options), per_row):
+        row = []
+        for code, label in options[i:i + per_row]:
+            mark = "✅ " if code in selected else "▫️ "
+            row.append(InlineKeyboardButton(
+                text=f"{mark}{label}", callback_data=f"cp_tog:{code}",
+            ))
+        rows.append(row)
+
+    for preset in (presets or []):
+        rows.append([InlineKeyboardButton(text=preset[0], callback_data=preset[1])])
+
+    rows.append([
+        InlineKeyboardButton(text="🧹 Сбросить", callback_data="cp_clear"),
+        InlineKeyboardButton(text="💾 Готово",   callback_data="cp_done"),
+    ])
+    rows.append([InlineKeyboardButton(text="◀️ Отмена",
+                                      callback_data=f"filter_edit:{filter_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _multi_options(field: str) -> tuple[list[tuple[str, str]], int, list, str]:
+    """Варианты, ширина строки, пресеты и заголовок для поля множественного выбора."""
+    if field == "title_groups":
+        return (
+            [(code, label) for code, (_, label) in TITLE_GROUPS.items()],
+            1,
+            [],
+            "📄 <b>Тип документа</b>\n\nОтметь, какие подходят. "
+            "Ничего не отмечено — берём любые.",
+        )
+    if field == "damage_exclude":
+        return (
+            sorted(((code, label) for code, (_, label) in DAMAGE_CODES.items()),
+                   key=lambda x: x[1]),
+            2,
+            [("🗑 Отметить пожары, потоп и химию", "cp_preset:junk")],
+            "💥 <b>Исключить повреждения</b>\n\nОтмеченные типы "
+            "<b>не будут</b> попадать в выдачу.",
+        )
+    if field == "yards":
+        return (
+            [(s, s) for s in YARD_STATES],
+            5,
+            [],
+            "🏁 <b>Площадки Copart</b>\n\nОтметь штаты и провинции. "
+            "Ничего не отмечено — вся страна.\n"
+            "<i>Чем ближе к порту вывоза, тем дешевле доставка.</i>",
+        )
+    return [], 2, [], ""
+
+
+MULTI_FIELDS = {"title_groups", "damage_exclude", "yards"}
 
 
 def _confirm_delete_kb(filter_id: int) -> InlineKeyboardMarkup:
@@ -492,6 +576,25 @@ def _render_filter(f) -> str:
     af, at = _opt(f, "auction_date_from"), _opt(f, "auction_date_to")
     if af or at:
         lines.append(f"🗓 <b>Аукцион:</b>  {af or '—'} – {at or '—'}")
+
+    titles = list(_opt(f, "title_groups") or [])
+    if titles:
+        names = [TITLE_GROUPS[c][1] for c in titles if c in TITLE_GROUPS]
+        lines.append(f"📄 <b>Документ:</b>  {', '.join(names)}")
+
+    excluded = list(_opt(f, "damage_exclude") or [])
+    if excluded:
+        names = [DAMAGE_CODES[c][1] for c in excluded if c in DAMAGE_CODES]
+        lines.append(f"💥 <b>Исключено:</b>  {', '.join(names)}")
+
+    yards = list(_opt(f, "yards") or [])
+    if yards:
+        lines.append(f"🏁 <b>Площадки:</b>  {', '.join(yards)}")
+
+    if _opt(f, "run_and_drive"):
+        lines.append("🚀 <b>Только на ходу</b>")
+    if _opt(f, "buy_now_only"):
+        lines.append("⚡️ <b>Только «купить сразу»</b>")
 
     lines.append(f"<code>{'─' * 24}</code>")
     lines.append(f"📡 {srcs}")
@@ -841,6 +944,40 @@ async def cb_edit_field(call: CallbackQuery, state: FSMContext):
                                       callback_data=f"filter_edit:{filter_id}")],
             ),
         )
+    elif field in MULTI_FIELDS:
+        current = list(_opt(f, field) or [])
+        await state.update_data(cp_selected=current)
+        options, per_row, presets, header = _multi_options(field)
+        await call.message.edit_text(
+            header,
+            parse_mode="HTML",
+            reply_markup=_multi_kb(field, options, current, filter_id, per_row, presets),
+        )
+    elif field in ("run_and_drive", "buy_now_only"):
+        titles = {
+            "run_and_drive": (
+                "🚀 <b>Только на ходу</b>\n\n"
+                "Оставить лишь те лоты, которые заводятся и едут "
+                "(отметка Run and Drive у Copart)."
+            ),
+            "buy_now_only": (
+                "⚡️ <b>Только «купить сразу»</b>\n\n"
+                "Оставить лишь лоты с фиксированной ценой Buy It Now — "
+                "их можно взять без участия в торгах."
+            ),
+        }
+        await call.message.edit_text(
+            titles[field],
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="✅ Включить",  callback_data="edit_val:YES"),
+                    InlineKeyboardButton(text="❌ Выключить", callback_data="edit_val:NONE"),
+                ],
+                [InlineKeyboardButton(text="◀️ Отмена",
+                                      callback_data=f"filter_edit:{filter_id}")],
+            ]),
+        )
     elif field == "cities":
         current = list(f["cities"] or [])
         await state.update_data(edit_cities=current)
@@ -890,6 +1027,8 @@ async def cb_edit_val(call: CallbackQuery, state: FSMContext):
 
     if val_raw == "NONE":
         value = None
+    elif field in ("run_and_drive", "buy_now_only"):
+        value = True if val_raw == "YES" else None
     elif field == "sources":
         value = SOURCE_SETS[val_raw]
     elif field == "brand":
@@ -946,6 +1085,78 @@ async def fsm_edit_text(message: Message, state: FSMContext):
         parse_mode="HTML",
         reply_markup=_filter_detail_kb(filter_id, f["is_active"]),
     )
+
+
+# ── Множественный выбор: переключение, пресеты, сохранение ────────────────────
+
+async def _redraw_multi(call: CallbackQuery, state: FSMContext, selected: list[str]):
+    data = await state.get_data()
+    field     = data["edit_field"]
+    filter_id = data["edit_filter_id"]
+    options, per_row, presets, header = _multi_options(field)
+    chosen = ", ".join(selected) if selected else "ничего"
+    try:
+        await call.message.edit_text(
+            f"{header}\n\nВыбрано: <b>{chosen}</b>",
+            parse_mode="HTML",
+            reply_markup=_multi_kb(field, options, selected, filter_id, per_row, presets),
+        )
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data.startswith("cp_tog:"), StateFilter(EditForm.entering_value))
+async def cb_cp_toggle(call: CallbackQuery, state: FSMContext):
+    code = call.data.split(":", 1)[1]
+    data = await state.get_data()
+    selected = list(data.get("cp_selected", []))
+    if code in selected:
+        selected.remove(code)
+    else:
+        selected.append(code)
+    await state.update_data(cp_selected=selected)
+    await _redraw_multi(call, state, selected)
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("cp_preset:"), StateFilter(EditForm.entering_value))
+async def cb_cp_preset(call: CallbackQuery, state: FSMContext):
+    preset = call.data.split(":", 1)[1]
+    data = await state.get_data()
+    selected = list(data.get("cp_selected", []))
+    if preset == "junk":
+        for code in DAMAGE_JUNK:
+            if code not in selected:
+                selected.append(code)
+    await state.update_data(cp_selected=selected)
+    await _redraw_multi(call, state, selected)
+    await call.answer("Отмечено")
+
+
+@router.callback_query(F.data == "cp_clear", StateFilter(EditForm.entering_value))
+async def cb_cp_clear(call: CallbackQuery, state: FSMContext):
+    await state.update_data(cp_selected=[])
+    await _redraw_multi(call, state, [])
+    await call.answer("Сброшено")
+
+
+@router.callback_query(F.data == "cp_done", StateFilter(EditForm.entering_value))
+async def cb_cp_done(call: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    field     = data["edit_field"]
+    filter_id = data["edit_filter_id"]
+    selected  = list(data.get("cp_selected", []))
+
+    await update_filter_field(filter_id, OWNER_ID, field, selected or None)
+    await state.clear()
+
+    f = await get_filter_by_id(filter_id, OWNER_ID)
+    await call.message.edit_text(
+        _render_filter(f),
+        parse_mode="HTML",
+        reply_markup=_filter_detail_kb(filter_id, f["is_active"]),
+    )
+    await call.answer("✅ Сохранено")
 
 
 # ── Выбор марки при редактировании ───────────────────────────────────────────
@@ -1437,15 +1648,27 @@ def _fmt_usd(v: Optional[int]) -> str:
 def _render_copart_lot(row) -> str:
     """Одна карточка лота для списка в чате."""
     parts = [f"🟡 <b>{row['title'] or 'Лот'}</b>"]
-    parts.append(f"<code>Лот {row['external_id']}</code> · {_fmt_usd(row['price'])}")
+
+    # У лотов «купить сразу» главная цена — фиксированная, оценки часто нет
+    buy_now = _opt(row, "buy_now_price")
+    price_str = f"⚡️ сразу {_fmt_usd(buy_now)}" if buy_now else _fmt_usd(row["price"])
+    parts.append(f"<code>Лот {row['external_id']}</code> · {price_str}")
 
     specs = []
     if row["year"]:
         specs.append(f"{row['year']} г.")
     if row["mileage"]:
         specs.append(f"{row['mileage']:,}".replace(",", " ") + " миль")
+    if (_opt(row, "odometer_brand") or "").upper() == "NOT ACTUAL" and row["mileage"]:
+        specs.append("⚠️ пробег не подтверждён")
     if specs:
         parts.append("📋 " + "  ·  ".join(specs))
+
+    state = [s for s in (title_ru(_opt(row, "title_group")),
+                         "🚀 На ходу" if _opt(row, "run_and_drive") else "",
+                         keys_ru(_opt(row, "has_keys"))) if s]
+    if state:
+        parts.append("  ·  ".join(state))
 
     damage = _opt(row, "damage_description")
     if damage:

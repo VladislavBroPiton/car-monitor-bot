@@ -10,7 +10,7 @@ from parsers.autoru import AutoRuParser
 from parsers.drom import DromParser
 from parsers.avito import AvitoParser
 from parsers.copart import CopartParser
-from notifier import process_listings
+from notifier import process_listings, notify_upcoming_auctions
 
 logger = logging.getLogger(__name__)
 
@@ -70,13 +70,25 @@ async def run_parsers(bot: Bot) -> dict:
             logger.error(f"scheduler: ошибка фильтра «{f.name}»: {e}")
             continue
 
+    # Напоминаем о торгах, которые вот-вот начнутся
+    reminders = 0
+    try:
+        reminders = await notify_upcoming_auctions(bot)
+    except Exception as e:
+        logger.warning(f"scheduler: ошибка напоминаний: {e}")
+
     try:
         await cleanup_old_listings(days=30)
     except Exception as e:
         logger.warning(f"scheduler: ошибка очистки: {e}")
 
-    logger.info(f"scheduler: завершён, новых: {total_new}")
-    return {"status": "ok", "filters": len(filters), "new_listings": total_new}
+    logger.info(f"scheduler: завершён, новых: {total_new}, напоминаний: {reminders}")
+    return {
+        "status": "ok",
+        "filters": len(filters),
+        "new_listings": total_new,
+        "reminders": reminders,
+    }
 
 
 def create_scheduler_router(bot: Bot) -> APIRouter:

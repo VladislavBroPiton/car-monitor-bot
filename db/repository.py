@@ -18,6 +18,28 @@ _MIGRATIONS = (
     "ALTER TABLE filters       ADD COLUMN IF NOT EXISTS auction_date_from DATE",
     "ALTER TABLE filters       ADD COLUMN IF NOT EXISTS auction_date_to DATE",
     "CREATE INDEX IF NOT EXISTS idx_seen_listings_auction_date ON seen_listings (auction_date)",
+    # Расширенные поля лота Copart
+    "ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS currency TEXT",
+    "ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS image_url TEXT",
+    "ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS title_group TEXT",
+    "ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS has_keys TEXT",
+    "ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS run_and_drive BOOLEAN",
+    "ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS buy_now_price INTEGER",
+    "ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS repair_cost INTEGER",
+    "ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS odometer_brand TEXT",
+    "ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS vin TEXT",
+    "ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS specs TEXT",
+    "ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS auction_notify_stage SMALLINT DEFAULT 0",
+    "ALTER TABLE favorites     ADD COLUMN IF NOT EXISTS currency TEXT",
+    "ALTER TABLE favorites     ADD COLUMN IF NOT EXISTS image_url TEXT",
+    # Расширенные фильтры Copart
+    "ALTER TABLE filters ADD COLUMN IF NOT EXISTS title_groups TEXT[]",
+    "ALTER TABLE filters ADD COLUMN IF NOT EXISTS damage_exclude TEXT[]",
+    "ALTER TABLE filters ADD COLUMN IF NOT EXISTS yards TEXT[]",
+    "ALTER TABLE filters ADD COLUMN IF NOT EXISTS run_and_drive BOOLEAN",
+    "ALTER TABLE filters ADD COLUMN IF NOT EXISTS buy_now_only BOOLEAN",
+    "CREATE INDEX IF NOT EXISTS idx_seen_listings_auction_notify "
+    "ON seen_listings (source, auction_date, auction_notify_stage)",
 )
 
 
@@ -117,6 +139,7 @@ async def update_filter_field(
         "price_from", "price_to", "mileage_from", "mileage_to",
         "cities", "transmission", "body_type", "sources",
         "auction_date_from", "auction_date_to",
+        "title_groups", "damage_exclude", "yards", "run_and_drive", "buy_now_only",
     }
     if field not in allowed:
         return False
@@ -148,20 +171,26 @@ async def toggle_filter(filter_id: int, user_id: int, active: bool) -> bool:
 
 # ── Seen listings ─────────────────────────────────────────────────────────────
 
-async def mark_seen(
-    source: str,
-    external_id: str,
-    url: str,
-    title: Optional[str] = None,
-    price: Optional[int] = None,
-    year: Optional[int] = None,
-    mileage: Optional[int] = None,
-    city: Optional[str] = None,
-    transmission: Optional[str] = None,
-    damage_description: Optional[str] = None,
-    auction_date: Optional[datetime.datetime] = None,
-) -> bool:
+# Колонки seen_listings, которые заполняются из одноимённых атрибутов Listing.
+# Чтобы добавить поле, достаточно дописать его сюда и в миграции.
+SEEN_COLUMNS = (
+    "source", "external_id", "url", "title", "price", "year", "mileage",
+    "city", "transmission",
+    # Copart
+    "damage_description", "auction_date", "currency", "image_url", "title_group",
+    "has_keys", "run_and_drive", "buy_now_price", "repair_cost",
+    "odometer_brand", "vin", "specs",
+)
+
+
+async def mark_seen(listing) -> bool:
+    """Записать объявление, если оно ещё не попадалось. True — новое."""
     pool = await get_pool()
+    source = listing.source
+    url    = listing.url
+    title  = listing.title
+    price  = listing.price
+
     # Дедупликация по URL
     if url:
         exists = await pool.fetchval(
@@ -177,18 +206,49 @@ async def mark_seen(
         )
         if exists:
             return False
+
+    values      = [getattr(listing, col, None) for col in SEEN_COLUMNS]
+    columns_sql = ", ".join(SEEN_COLUMNS)
+    params_sql  = ", ".join(f"${i}" for i in range(1, len(SEEN_COLUMNS) + 1))
+
     result = await pool.execute(
-        """
-        INSERT INTO seen_listings
-            (source, external_id, url, title, price, year, mileage, city, transmission,
-             damage_description, auction_date)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        f"""
+        INSERT INTO seen_listings ({columns_sql})
+        VALUES ({params_sql})
         ON CONFLICT (source, external_id) DO NOTHING
         """,
-        source, external_id, url, title, price, year, mileage, city, transmission,
-        damage_description, auction_date,
+        *values,
     )
     return result == "INSERT 0 1"
+
+
+async def get_lots_to_remind(stage: int, within_hours: int) -> list[asyncpg.Record]:
+    """
+    Лоты Copart, у которых торги начнутся в ближайшие within_hours
+    и которым ещё не отправляли напоминание этой стадии.
+    """
+    pool = await get_pool()
+    return await pool.fetch(
+        """
+        SELECT * FROM seen_listings
+        WHERE source = 'copart'
+          AND auction_date IS NOT NULL
+          AND auction_date > NOW()
+          AND auction_date <= NOW() + ($1 || ' hours')::INTERVAL
+          AND COALESCE(auction_notify_stage, 0) < $2
+        ORDER BY auction_date
+        """,
+        str(within_hours), stage,
+    )
+
+
+async def set_notify_stage(external_id: str, stage: int):
+    pool = await get_pool()
+    await pool.execute(
+        """UPDATE seen_listings SET auction_notify_stage = $1
+           WHERE source = 'copart' AND external_id = $2""",
+        stage, external_id,
+    )
 
 
 async def cleanup_old_listings(days: int = 30):

@@ -28,22 +28,33 @@
 #   MAKE  lot_make_desc:"CHEVROLET"
 #   MODL  lot_model_desc:"CRUZE"
 #   YEAR  lot_year:[2015 TO 2020]
-#   ODM   odometer_reading_received:[0 TO 150000]
+#   ODM   odometer_reading_received:[0 TO 150000]        (в милях)
 #   SDAT  auction_date_utc:[NOW TO NOW+7DAY]
-#   LOC   yard_name:"FL - MIAMI"
+#   LOC   yard_name:"FL - MIAMI"  либо  yard_name:FL*    (весь штат)
+#   TITL  title_group_code:TITLEGROUP_C                  (C чистый / S salvage / J не восстановить)
+#   FETI  lot_condition_code:CERT-D                      (Run and Drive — на ходу)
+#   FETI  buy_it_now_code:B1                             (можно купить сразу)
+#   PRID  damage_type_code:DAMAGECODE_FR                 (или -DAMAGECODE_BN — исключить)
 #   TMTP  transmission_type:"AUTOMATIC"
 #   BODY  body_style:"4DR SPOR"
+#
+# Несколько выражений внутри одной группы объединяются по ИЛИ,
+# разные группы — по И. Отрицание пишется через «-» перед полем.
 #
 # Поля лота (сокращения Copart):
 #   ln / lotNumberStr — номер лота        ld  — заголовок «2016 CHEVROLET CRUZE LT»
 #   lcy — год                             mkn — марка          lm — модель
-#   dd  — описание повреждения            td  — тип документа  tgd — группа документа
-#   orr — пробег (одометр)                ord — ACTUAL / NOT ACTUAL
-#   la  — оценочная стоимость             cuc — валюта (USD/CAD)
+#   dd  — описание повреждения            tgd — тип документа («SALVAGE TITLE»)
+#   orr — пробег (одометр, мили)          ord — ACTUAL / NOT ACTUAL
+#   la  — оценочная стоимость             rc  — оценка стоимости ремонта
+#   bnp — цена «купить сразу»             cuc — валюта (USD/CAD)
+#   lcc — состояние лота, CERT-D = на ходу (Run and Drive)
+#   hk  — ключи: YES / NO / EXEMPT        fv  — VIN (частично замаскирован)
 #   ad  — дата аукциона (epoch ms)        at — время, tz — таймзона
 #   yn  — площадка «FL - MIAMI»           locCity / locState / locCountry
-#   ldu — slug для ссылки                 tims — превью-картинка
+#   ldu — slug для ссылки                 tims — картинка (см. IMAGE_SIZE)
 #   tsmn — КПП                            ft — топливо, drv — привод, clr — цвет
+#   egn — двигатель «2.4L  4»             cy — число цилиндров
 
 import asyncio
 import datetime
@@ -64,6 +75,90 @@ PAGE_SIZE = 100     # максимум, который отдаёт endpoint з�
 MAX_PAGES = 3       # 300 лотов на фильтр — дальше уже неактуальные торги
 TIMEOUT   = aiohttp.ClientTimeout(total=45)
 
+# Copart отдаёт одну картинку в трёх размерах — отличается только суффикс:
+#   _thb ~5 КБ (превью)   _ful ~78 КБ (обычное)   _hrs ~270 КБ (высокое)
+# В API приходит _thb; для карточек берём _ful — читаемо и не тяжело.
+IMAGE_SIZE = "_ful"
+
+# Тип документа: код группы → как показываем
+TITLE_GROUPS = {
+    "C": ("TITLEGROUP_C", "✅ Чистый документ"),
+    "S": ("TITLEGROUP_S", "⚠️ Salvage (конструктивная гибель)"),
+    "J": ("TITLEGROUP_J", "⛔ Восстановлению не подлежит"),
+}
+
+# Тип документа из поля лота tgd → короткая русская подпись
+TITLE_RU = {
+    "CLEAN TITLE":      "✅ Чистый документ",
+    "SALVAGE TITLE":    "⚠️ Salvage",
+    "NON-REPAIRABLE":   "⛔ Не восстановить",
+    "NON REPAIRABLE":   "⛔ Не восстановить",
+    "CERTIFICATE OF DESTRUCTION": "⛔ Под утилизацию",
+}
+
+# Наличие ключей
+KEYS_RU = {"YES": "🔑 Ключи есть", "NO": "🚫 Без ключей", "EXEMPT": "🔑 Ключи не требуются"}
+
+# Повреждения Copart — единая таблица, чтобы название в фильтре и в карточке
+# не разъезжались: короткий код → (код для фильтра, значение поля dd, по-русски)
+DAMAGE = {
+    "AO": ("DAMAGECODE_AO", "ALL OVER",             "Круговые"),
+    "BC": ("DAMAGECODE_BC", "BIOHAZARD/CHEMICAL",   "Биоопасность/химия"),
+    "BN": ("DAMAGECODE_BN", "BURN",                 "Пожар"),
+    "BE": ("DAMAGECODE_BE", "BURN - ENGINE",        "Пожар (двигатель)"),
+    "BI": ("DAMAGECODE_BI", "BURN - INTERIOR",      "Пожар (салон)"),
+    "DH": ("DAMAGECODE_DH", "DAMAGE HISTORY",       "История повреждений"),
+    "FD": ("DAMAGECODE_FD", "FRAME DAMAGE",         "Повреждение рамы"),
+    "FR": ("DAMAGECODE_FR", "FRONT END",            "Перед"),
+    "HL": ("DAMAGECODE_HL", "HAIL",                 "Град"),
+    "MC": ("DAMAGECODE_MC", "MECHANICAL",           "Механическая неисправность"),
+    "MN": ("DAMAGECODE_MN", "MINOR DENT/SCRATCHES", "Мелкие вмятины/царапины"),
+    "VI": ("DAMAGECODE_VI", "MISSING/ALTERED VIN",  "Отсутствует/изменён VIN"),
+    "NW": ("DAMAGECODE_NW", "NORMAL WEAR",          "Обычный износ"),
+    "PR": ("DAMAGECODE_PR", "PARTIAL REPAIR",       "Частично отремонтирован"),
+    "RR": ("DAMAGECODE_RR", "REAR END",             "Зад"),
+    "RJ": ("DAMAGECODE_RJ", "REJECTED REPAIR",      "Отклонённый ремонт"),
+    "VP": ("DAMAGECODE_VP", "REPLACED VIN",         "Заменён VIN"),
+    "RO": ("DAMAGECODE_RO", "ROLLOVER",             "Переворот"),
+    "SD": ("DAMAGECODE_SD", "SIDE",                 "Бок"),
+    "ST": ("DAMAGECODE_ST", "STRIPPED",             "Разукомплектован"),
+    "TP": ("DAMAGECODE_TP", "TOP/ROOF",             "Крыша"),
+    "UN": ("DAMAGECODE_UN", "UNDERCARRIAGE",        "Днище"),
+    "UK": ("DAMAGECODE_UK", "UNKNOWN",              "Неизвестно"),
+    "VN": ("DAMAGECODE_VN", "VANDALISM",            "Вандализм"),
+    "WA": ("DAMAGECODE_WA", "WATER/FLOOD",          "Вода/потоп"),
+}
+
+# короткий код → (полный код, русское название) — для сборки фильтра и кнопок
+DAMAGE_CODES = {k: (v[0], v[2]) for k, v in DAMAGE.items()}
+
+# Повреждения, которые чаще всего хочется отсечь сразу
+DAMAGE_JUNK = ["BN", "BE", "BI", "BC", "WA"]
+
+# Штаты и провинции, где есть площадки Copart
+YARD_STATES = [
+    "AB", "AK", "AL", "AR", "AZ", "CA", "CN", "CO", "CT", "DC", "DE", "FL",
+    "GA", "HI", "IA", "ID", "IL", "IN", "KS", "KY", "LA", "MA", "MD", "ME",
+    "MI", "MN", "MO", "MS", "MT", "NB", "NC", "ND", "NE", "NH", "NJ", "NM",
+    "NS", "NV", "NY", "OH", "OK", "ON", "OR", "PA", "QC", "RI", "SC", "SD",
+    "TN", "TX", "UT", "VA", "VT", "WA", "WI", "WV", "WY",
+]
+
+# Привод и топливо — для строки характеристик
+DRIVE_RU = {
+    "ALL WHEEL DRIVE":        "Полный",
+    "FOUR BY FOUR":           "4x4",
+    "4X4 W/REAR WHEEL DRV":   "4x4",
+    "FRONT WHEEL DRIVE":      "Передний",
+    "REAR WHEEL DRIVE":       "Задний",
+    "4X2":                    "4x2",
+}
+FUEL_RU = {
+    "GAS": "Бензин", "GASOLINE": "Бензин", "DIESEL": "Дизель",
+    "HYBRID ENGINE": "Гибрид", "HYBRID": "Гибрид", "ELECTRIC": "Электро",
+    "FLEXIBLE FUEL": "Битопливный", "COMPRESSED NATURAL GAS": "Метан",
+}
+
 # Названия марок в каталоге бота → значения lot_make_desc у Copart.
 # Несколько значений = OR внутри одной группы фильтра.
 MAKE_MAP: dict[str, list[str]] = {
@@ -76,33 +171,14 @@ MAKE_MAP: dict[str, list[str]] = {
 # Марок, которых на Copart нет вовсе (рынок США/Канады) — экономим запрос
 MAKES_NOT_ON_COPART = {"LADA", "SKODA", "RENAULT", "GEELY", "CHERY", "UAZ", "GAZ"}
 
-# Русские названия повреждений для карточек и уведомлений
-DAMAGE_RU: dict[str, str] = {
-    "FRONT END":            "Перед",
-    "REAR END":             "Зад",
-    "SIDE":                 "Бок",
-    "ALL OVER":             "Круговые",
-    "MINOR DENT/SCRATCHES": "Мелкие вмятины/царапины",
-    "NORMAL WEAR":          "Обычный износ",
-    "UNDERCARRIAGE":        "Днище",
-    "ROLLOVER":             "Переворот",
-    "TOP/ROOF":             "Крыша",
-    "WATER/FLOOD":          "Вода/потоп",
-    "BURN":                 "Пожар",
-    "BURN - ENGINE":        "Пожар (двигатель)",
-    "BURN - INTERIOR":      "Пожар (салон)",
-    "VANDALISM":            "Вандализм",
-    "HAIL":                 "Град",
-    "MECHANICAL":           "Механическая неисправность",
-    "ELECTRICAL":           "Электрика",
-    "SUSPENSION":           "Подвеска",
-    "STRIPPED":             "Разукомплектован",
-    "PARTIAL REPAIR":       "Частично отремонтирован",
-    "REPLACED VIN":         "Заменён VIN",
-    "DAMAGE HISTORY":       "История повреждений",
-    "BIOHAZARD/CHEMICAL":   "Биоопасность/химия",
-    "FRAME DAMAGE":         "Повреждение рамы",
-}
+# Значение поля dd → по-русски. Собирается из DAMAGE, плюс варианты,
+# которые встречаются в выдаче, но своего кода в справочнике не имеют.
+DAMAGE_RU: dict[str, str] = {v[1]: v[2] for v in DAMAGE.values()}
+DAMAGE_RU.update({
+    "ELECTRICAL":     "Электрика",
+    "SUSPENSION":     "Подвеска",
+    "NON REPAIRABLE": "Не восстановить",
+})
 
 HEADERS = {
     "Content-Type": "application/json",
@@ -122,6 +198,20 @@ def damage_ru(value: Optional[str]) -> str:
     if not value:
         return ""
     return DAMAGE_RU.get(value.strip().upper(), value.strip().title())
+
+
+def title_ru(value: Optional[str]) -> str:
+    """«SALVAGE TITLE» → «⚠️ Salvage»."""
+    if not value:
+        return ""
+    return TITLE_RU.get(value.strip().upper(), value.strip().title())
+
+
+def keys_ru(value: Optional[str]) -> str:
+    """«YES» → «🔑 Ключи есть»."""
+    if not value:
+        return ""
+    return KEYS_RU.get(value.strip().upper(), "")
 
 
 # ── Сборка запроса ────────────────────────────────────────────────────────────
@@ -179,6 +269,32 @@ def _build_filter(f: SearchFilter, with_model: bool = True) -> dict:
     if date_expr:
         flt["SDAT"] = [date_expr]
 
+    # Тип документа: чистый / salvage / не восстановить
+    groups = [TITLE_GROUPS[c][0] for c in (f.title_groups or []) if c in TITLE_GROUPS]
+    if groups:
+        flt["TITL"] = [f"title_group_code:{g}" for g in groups]
+
+    # Площадки: храним двухбуквенные коды штатов, ищем по префиксу имени площадки
+    states = [s.strip().upper() for s in (f.yards or []) if s.strip().upper() in YARD_STATES]
+    if states:
+        flt["LOC"] = [f"yard_name:{s}*" for s in states]
+
+    # «На ходу» и «купить сразу» живут в одной группе FETI,
+    # а внутри группы условия объединяются по ИЛИ — поэтому вместе их не ставим:
+    # приоритет у «на ходу», Buy It Now отбираем уже у себя.
+    feti = []
+    if f.run_and_drive:
+        feti.append("lot_condition_code:CERT-D")
+    elif f.buy_now_only:
+        feti.append("buy_it_now_code:B1")
+    if feti:
+        flt["FETI"] = feti
+
+    # Исключение нежелательных повреждений — отрицанием
+    excluded = [DAMAGE_CODES[c][0] for c in (f.damage_exclude or []) if c in DAMAGE_CODES]
+    if excluded:
+        flt["PRID"] = [f"-damage_type_code:({' OR '.join(excluded)})"]
+
     return flt
 
 
@@ -223,6 +339,37 @@ def _to_datetime(epoch_ms) -> Optional[datetime.datetime]:
         return None
 
 
+def _image_url(raw: dict) -> Optional[str]:
+    """Из превью-ссылки делаем ссылку нужного размера."""
+    url = (raw.get("tims") or "").strip()
+    if not url:
+        return None
+    return url.replace("_thb.jpg", f"{IMAGE_SIZE}.jpg")
+
+
+def _specs(raw: dict) -> Optional[str]:
+    """Строка характеристик: двигатель · привод · топливо · цвет."""
+    parts = []
+
+    engine = " ".join((raw.get("egn") or "").split())   # «2.4L  4» → «2.4L 4»
+    if engine:
+        parts.append(engine)
+
+    drive = (raw.get("drv") or "").strip().upper()
+    if drive:
+        parts.append(DRIVE_RU.get(drive, drive.title()))
+
+    fuel = (raw.get("ft") or "").strip().upper()
+    if fuel:
+        parts.append(FUEL_RU.get(fuel, fuel.title()))
+
+    color = (raw.get("clr") or "").strip()
+    if color:
+        parts.append(color.title())
+
+    return "  ·  ".join(parts) or None
+
+
 def _parse_lot(raw: dict, filter_name: str) -> Optional[Listing]:
     lot_id = str(raw.get("lotNumberStr") or raw.get("ln") or "").strip()
     if not lot_id:
@@ -248,6 +395,15 @@ def _parse_lot(raw: dict, filter_name: str) -> Optional[Listing]:
         damage_description=(raw.get("dd") or "").strip() or None,
         auction_date=_to_datetime(raw.get("ad")),
         currency=(raw.get("cuc") or "USD").strip().upper(),
+        image_url=_image_url(raw),
+        title_group=(raw.get("tgd") or "").strip().upper() or None,
+        has_keys=(raw.get("hk") or "").strip().upper() or None,
+        run_and_drive=(raw.get("lcc") or "").strip().upper() == "CERT-D",
+        buy_now_price=_to_int(raw.get("bnp")),
+        repair_cost=_to_int(raw.get("rc")),
+        odometer_brand=(raw.get("ord") or "").strip().upper() or None,
+        vin=(raw.get("fv") or "").strip() or None,
+        specs=_specs(raw),
     )
 
 
@@ -278,6 +434,10 @@ def _matches(listing: Listing, f: SearchFilter, model_client_side: bool) -> bool
         if needle not in haystack:
             return False
 
+    # Buy It Now отсеиваем здесь, если группу FETI занял фильтр «на ходу»
+    if f.buy_now_only and f.run_and_drive and not listing.buy_now_price:
+        return False
+
     return True
 
 
@@ -306,6 +466,7 @@ async def _post(session: aiohttp.ClientSession, payload: dict) -> Optional[dict]
 async def _fetch_pages(session, f: SearchFilter, with_model: bool) -> list[dict]:
     """Постранично забираем лоты, пока не кончатся или не упрёмся в MAX_PAGES."""
     raw_lots: list[dict] = []
+    total = 0
 
     for page in range(MAX_PAGES):
         results = await _post(session, _build_payload(f, page, with_model))
@@ -316,12 +477,20 @@ async def _fetch_pages(session, f: SearchFilter, with_model: bool) -> list[dict]
         raw_lots.extend(content)
 
         if page == 0:
-            logger.info(f"copart: найдено по фильтру «{f.name}»: "
-                        f"{results.get('totalElements', 0)} лотов")
+            total = results.get("totalElements", 0)
+            logger.info(f"copart: найдено по фильтру «{f.name}»: {total} лотов")
 
         if len(content) < PAGE_SIZE:
             break
         await asyncio.sleep(0.4)   # не долбим API
+
+    # Не молчим об обрезке: иначе неполная выдача выглядит как «больше ничего нет»
+    if total > len(raw_lots):
+        logger.warning(
+            f"copart: фильтр «{f.name}» — забрали {len(raw_lots)} из {total} лотов "
+            f"(лимит {MAX_PAGES} стр. по {PAGE_SIZE}). "
+            f"Сузь фильтр, если нужны все"
+        )
 
     return raw_lots
 

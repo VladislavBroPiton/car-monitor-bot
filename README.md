@@ -114,15 +114,26 @@ Content-Type: application/json
 | `MAKE` | `lot_make_desc:"CHEVROLET"` | марка |
 | `MODL` | `lot_model_desc:"CRUZE"` | модель |
 | `YEAR` | `lot_year:[2015 TO 2020]` | год от/до |
-| `ODM`  | `odometer_reading_received:[0 TO 150000]` | пробег от/до |
+| `ODM`  | `odometer_reading_received:[0 TO 150000]` | пробег от/до (в милях) |
 | `SDAT` | `auction_date_utc:[NOW TO NOW+7DAY]` | аукцион с/по |
+| `TITL` | `title_group_code:TITLEGROUP_C` | документ |
+| `FETI` | `lot_condition_code:CERT-D` | только на ходу |
+| `FETI` | `buy_it_now_code:B1` | только «купить сразу» |
+| `PRID` | `-damage_type_code:(DAMAGECODE_BN OR …)` | исключить повреждения |
+| `LOC`  | `yard_name:FL*` | площадки (штаты) |
+
+Внутри одной группы выражения объединяются по ИЛИ, разные группы — по И,
+отрицание пишется через `-`. Группа `FETI` одна на «на ходу» и «купить сразу»,
+поэтому при обоих включённых фильтрах в запрос уходит «на ходу»,
+а Buy It Now отбирается уже на нашей стороне.
 
 Особенности:
 
 - **Цена** — `la`, оценочная стоимость в **долларах** (у канадских лотов — CAD).
   Текущие ставки в поиске всегда `0` — они видны только авторизованным.
   Границы цены в фильтре задаются в рублях и пересчитываются по `USD_RUB_RATE`.
-- **Пробег** — `orr`, в **милях**.
+- **Пробег** — `orr`, в **милях**. Границы пробега в фильтре задаются в километрах
+  и переводятся в мили автоматически.
 - **Город** — площадка хранения (`yn`), например `FL - JACKSONVILLE NORTH`.
 - **Дата аукциона** — `ad`; у лотов со статусом Future её нет, поле остаётся пустым.
 - Названия моделей у Copart свои. Если точное совпадение по `lot_model_desc`
@@ -131,6 +142,33 @@ Content-Type: application/json
 
 Источник `copart` не входит в `sources` по умолчанию — его нужно выбрать явно
 в фильтре (кнопка «🟡 Copart» или «🌍 Всё вместе»).
+
+### Что показывается по лоту
+
+Фото (`tims`), номер лота, оценочная стоимость и цена «купить сразу», оценка
+стоимости ремонта (`rc`), тип документа, отметка «на ходу», наличие ключей,
+характер повреждения, дата торгов по Москве, площадка, VIN и характеристики
+(двигатель, привод, топливо, цвет).
+
+Картинка приходит в виде превью `_thb.jpg`; заменой суффикса доступны
+`_ful.jpg` (~78 КБ) и `_hrs.jpg` (~270 КБ). Используется `_ful` —
+константа `IMAGE_SIZE` в `parsers/copart.py`.
+
+Отметка `NOT ACTUAL` в поле `ord` означает, что показаниям одометра верить
+нельзя — в карточке это выводится явно.
+
+### Напоминания о торгах
+
+`notify_upcoming_auctions` вызывается из `scheduler.py` на каждом обходе
+и присылает уведомление за сутки и за час до начала торгов. Стадия хранится
+в `seen_listings.auction_notify_stage` (0 → 1 → 2), поэтому повторов нет.
+В тихие часы напоминания не отправляются.
+
+### Ограничение выдачи
+
+За один обход берётся не больше `MAX_PAGES × PAGE_SIZE` = 300 лотов на фильтр.
+Если найдено больше, в лог уходит `WARNING` с фактическим числом — молча
+выдача не обрезается.
 
 ### Миграция БД
 
@@ -144,6 +182,24 @@ ALTER TABLE favorites     ADD COLUMN IF NOT EXISTS damage_description TEXT;
 ALTER TABLE favorites     ADD COLUMN IF NOT EXISTS auction_date       TIMESTAMPTZ;
 ALTER TABLE filters       ADD COLUMN IF NOT EXISTS auction_date_from  DATE;
 ALTER TABLE filters       ADD COLUMN IF NOT EXISTS auction_date_to    DATE;
+
+ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS currency       TEXT;
+ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS image_url      TEXT;
+ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS title_group    TEXT;
+ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS has_keys       TEXT;
+ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS run_and_drive  BOOLEAN;
+ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS buy_now_price  INTEGER;
+ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS repair_cost    INTEGER;
+ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS odometer_brand TEXT;
+ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS vin            TEXT;
+ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS specs          TEXT;
+ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS auction_notify_stage SMALLINT DEFAULT 0;
+
+ALTER TABLE filters ADD COLUMN IF NOT EXISTS title_groups   TEXT[];
+ALTER TABLE filters ADD COLUMN IF NOT EXISTS damage_exclude TEXT[];
+ALTER TABLE filters ADD COLUMN IF NOT EXISTS yards          TEXT[];
+ALTER TABLE filters ADD COLUMN IF NOT EXISTS run_and_drive  BOOLEAN;
+ALTER TABLE filters ADD COLUMN IF NOT EXISTS buy_now_only   BOOLEAN;
 ```
 
 ## Команды бота

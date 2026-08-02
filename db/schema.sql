@@ -15,9 +15,14 @@ CREATE TABLE IF NOT EXISTS filters (
     transmission TEXT,
     body_type    TEXT,
     sources      TEXT[] DEFAULT ARRAY['autoru', 'drom'],
-    -- Диапазон даты аукциона, используется только источником copart
+    -- Поля, которые использует только источник copart
     auction_date_from DATE,
     auction_date_to   DATE,
+    title_groups   TEXT[],   -- C / S / J — тип документа
+    damage_exclude TEXT[],   -- коды исключаемых повреждений: BN, WA, BC…
+    yards          TEXT[],   -- штаты площадок: FL, TX…
+    run_and_drive  BOOLEAN,
+    buy_now_only   BOOLEAN,
     is_active    BOOLEAN DEFAULT TRUE,
     created_at   TIMESTAMPTZ DEFAULT NOW()
 );
@@ -36,6 +41,18 @@ CREATE TABLE IF NOT EXISTS seen_listings (
     -- Поля аукционов (copart)
     damage_description TEXT,
     auction_date       TIMESTAMPTZ,
+    currency           TEXT,
+    image_url          TEXT,
+    title_group        TEXT,
+    has_keys           TEXT,
+    run_and_drive      BOOLEAN,
+    buy_now_price      INTEGER,
+    repair_cost        INTEGER,
+    odometer_brand     TEXT,
+    vin                TEXT,
+    specs              TEXT,
+    -- 0 — не напоминали, 1 — отправлено за сутки, 2 — отправлено за час
+    auction_notify_stage SMALLINT DEFAULT 0,
     created_at  TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE (source, external_id)
 );
@@ -93,8 +110,30 @@ ALTER TABLE favorites     ADD COLUMN IF NOT EXISTS auction_date       TIMESTAMPT
 ALTER TABLE filters       ADD COLUMN IF NOT EXISTS auction_date_from  DATE;
 ALTER TABLE filters       ADD COLUMN IF NOT EXISTS auction_date_to    DATE;
 
+ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS currency        TEXT;
+ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS image_url       TEXT;
+ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS title_group     TEXT;
+ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS has_keys        TEXT;
+ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS run_and_drive   BOOLEAN;
+ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS buy_now_price   INTEGER;
+ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS repair_cost     INTEGER;
+ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS odometer_brand  TEXT;
+ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS vin             TEXT;
+ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS specs           TEXT;
+ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS auction_notify_stage SMALLINT DEFAULT 0;
+
+ALTER TABLE filters ADD COLUMN IF NOT EXISTS title_groups   TEXT[];
+ALTER TABLE filters ADD COLUMN IF NOT EXISTS damage_exclude TEXT[];
+ALTER TABLE filters ADD COLUMN IF NOT EXISTS yards          TEXT[];
+ALTER TABLE filters ADD COLUMN IF NOT EXISTS run_and_drive  BOOLEAN;
+ALTER TABLE filters ADD COLUMN IF NOT EXISTS buy_now_only   BOOLEAN;
+
 CREATE INDEX IF NOT EXISTS idx_seen_listings_auction_date
     ON seen_listings (auction_date);
+
+-- Для выборки лотов, которым пора напомнить о торгах
+CREATE INDEX IF NOT EXISTS idx_seen_listings_auction_notify
+    ON seen_listings (source, auction_date, auction_notify_stage);
 
 CREATE TABLE IF NOT EXISTS notification_settings (
     user_id         BIGINT PRIMARY KEY,

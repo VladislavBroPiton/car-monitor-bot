@@ -8,8 +8,14 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import datetime
 from config import OWNER_ID, USD_RUB_RATE
 from parsers.base import Listing
-from parsers.copart import damage_ru
-from db.repository import mark_seen, record_price, get_notification_settings
+from parsers.copart import damage_ru, title_ru, keys_ru
+from db.repository import (
+    mark_seen,
+    record_price,
+    get_notification_settings,
+    get_lots_to_remind,
+    set_notify_stage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -103,8 +109,14 @@ def _build_message(listing: Listing) -> str:
     if listing.year:
         specs.append(f"{listing.year} г.")
     if listing.mileage:
-        specs.append(_fmt_miles(listing.mileage) if is_copart
-                     else _fmt_mileage(listing.mileage))
+        if is_copart:
+            miles = _fmt_miles(listing.mileage)
+            # NOT ACTUAL — одометр скручен либо показания неизвестны
+            if (listing.odometer_brand or "").upper() == "NOT ACTUAL":
+                miles += " ⚠️ не подтверждён"
+            specs.append(miles)
+        else:
+            specs.append(_fmt_mileage(listing.mileage))
     tr = _fmt_transmission(listing.transmission)
     if tr:
         specs.append(tr)
@@ -126,18 +138,38 @@ def _build_message(listing: Listing) -> str:
     if is_copart:
         lines.append(f"<code>Лот {listing.external_id}</code>")
 
-    # Цена — главный акцент
-    label = "💰 Оценка:" if is_copart else "💰"
-    lines.append(f"\n<b>{label} {price}</b>")
+    # Цена — главный акцент. У лотов «купить сразу» она и есть главная,
+    # оценочной стоимости там часто нет вовсе.
+    if is_copart and listing.buy_now_price:
+        buy_now = _fmt_amount(listing.buy_now_price, listing.currency)
+        lines.append(f"\n<b>⚡️ Купить сразу: {buy_now}</b>")
+        if listing.price:
+            lines.append(f"<i>оценка: {price}</i>")
+    else:
+        label = "💰 Оценка:" if is_copart else "💰"
+        lines.append(f"\n<b>{label} {price}</b>")
+
+    if is_copart and listing.repair_cost:
+        lines.append(f"🔧 Ремонт: ~{_fmt_amount(listing.repair_cost, listing.currency)}")
 
     # Характеристики
     if specs:
         lines.append("📋 " + "  ·  ".join(specs))
 
-    # Повреждения и дата торгов
+    if is_copart and listing.specs:
+        lines.append(f"⚙️ {listing.specs}")
+
+    # Состояние лота: документ, ход, ключи, повреждение, торги
     if is_copart:
+        state = [s for s in (title_ru(listing.title_group),
+                             "🚀 На ходу" if listing.run_and_drive else "",
+                             keys_ru(listing.has_keys)) if s]
+        if state:
+            lines.append("  ·  ".join(state))
+
         if listing.damage_description:
             lines.append(f"💥 Повреждение: {damage_ru(listing.damage_description)}")
+
         auction = _fmt_auction_date(listing.auction_date)
         if auction:
             lines.append(f"🗓 Аукцион: {auction}")
@@ -146,6 +178,9 @@ def _build_message(listing: Listing) -> str:
     if listing.city:
         icon = "🏁" if is_copart else "📍"
         lines.append(f"{icon} {listing.city}")
+
+    if is_copart and listing.vin:
+        lines.append(f"<code>VIN {listing.vin}</code>")
 
     # Фильтр
     if listing.filter_name:
@@ -179,9 +214,29 @@ def _build_keyboard(listing: Listing) -> InlineKeyboardMarkup:
     ])
 
 
+CAPTION_LIMIT = 1024   # ограничение Telegram на подпись к фото
+
+
 async def send_listing(bot: Bot, listing: Listing, chat_id: int = OWNER_ID):
     text = _build_message(listing)
     kb   = _build_keyboard(listing)
+
+    # Лот с фотографией отправляем картинкой — по битой машине фото решает всё.
+    # Подпись длиннее лимита Telegram не примет, тогда шлём обычным сообщением.
+    if listing.image_url and len(text) <= CAPTION_LIMIT:
+        try:
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=listing.image_url,
+                caption=text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=kb,
+            )
+            return
+        except Exception as e:
+            # Картинка может быть недоступна — не теряем из-за этого объявление
+            logger.warning(f"notifier: фото не отправилось ({e}), шлю текстом")
+
     try:
         await bot.send_message(
             chat_id=chat_id,
@@ -220,19 +275,7 @@ async def process_listings(
             if listing.price > limit:
                 continue
 
-        is_new = await mark_seen(
-            source=listing.source,
-            external_id=listing.external_id,
-            url=listing.url,
-            title=listing.title,
-            price=listing.price,
-            year=listing.year,
-            mileage=listing.mileage,
-            city=listing.city,
-            transmission=listing.transmission,
-            damage_description=listing.damage_description,
-            auction_date=listing.auction_date,
-        )
+        is_new = await mark_seen(listing)
 
         # Записываем цену в историю
         if listing.price:
@@ -251,6 +294,61 @@ async def process_listings(
         await asyncio.sleep(SEND_DELAY)
 
     return new_count
+
+
+# ── Напоминания о торгах ──────────────────────────────────────────────────────
+
+# стадия → (за сколько часов предупредить, заголовок)
+AUCTION_REMINDERS = (
+    (1, 24, "🔔 <b>Торги завтра</b>"),
+    (2, 1,  "⏰ <b>Торги через час</b>"),
+)
+
+
+async def notify_upcoming_auctions(bot: Bot, chat_id: int = OWNER_ID) -> int:
+    """
+    Напоминает о лотах Copart, торги по которым скоро начнутся.
+    Каждому лоту — не больше одного напоминания на стадию.
+    """
+    settings = await get_notification_settings(chat_id)
+    if _is_quiet_hours(settings.get("quiet_from", 23), settings.get("quiet_to", 8)):
+        return 0
+
+    sent = 0
+    for stage, hours, header in AUCTION_REMINDERS:
+        try:
+            rows = await get_lots_to_remind(stage=stage, within_hours=hours)
+        except Exception as e:
+            logger.error(f"напоминания: ошибка выборки (стадия {stage}): {e}")
+            continue
+
+        for row in rows:
+            when = _fmt_auction_date(row["auction_date"])
+            price = _fmt_amount(row["price"], row["currency"])
+            text = (
+                f"{header}\n"
+                f"<code>Лот {row['external_id']}</code>\n\n"
+                f"<b>{row['title'] or 'Лот Copart'}</b>\n"
+                f"💰 {price}\n"
+                f"🗓 {when}\n"
+                f"🏁 {row['city'] or '—'}\n\n"
+                f'<a href="{row["url"]}">Открыть лот →</a>'
+            )
+            try:
+                await bot.send_message(
+                    chat_id=chat_id, text=text,
+                    parse_mode=ParseMode.HTML, disable_web_page_preview=True,
+                )
+                await set_notify_stage(row["external_id"], stage)
+                sent += 1
+                await asyncio.sleep(SEND_DELAY)
+            except Exception as e:
+                logger.error(f"напоминания: не отправлено по лоту "
+                             f"{row['external_id']}: {e}")
+
+    if sent:
+        logger.info(f"напоминания: отправлено {sent}")
+    return sent
 
 
 async def process_price_drops(

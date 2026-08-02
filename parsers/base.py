@@ -21,6 +21,15 @@ class Listing:
     damage_description: Optional[str] = None            # «FRONT END», «REAR END», …
     auction_date: Optional[datetime.datetime] = None    # дата и время торгов (UTC)
     currency: Optional[str] = None                      # USD / CAD — валюта лота
+    image_url: Optional[str] = None                     # фото лота
+    title_group: Optional[str] = None                   # CLEAN / SALVAGE / NON-REPAIRABLE
+    has_keys: Optional[str] = None                      # YES / NO / EXEMPT
+    run_and_drive: Optional[bool] = None                # заводится и едет
+    buy_now_price: Optional[int] = None                 # цена «купить сразу»
+    repair_cost: Optional[int] = None                   # оценка стоимости ремонта
+    odometer_brand: Optional[str] = None                # ACTUAL / NOT ACTUAL
+    vin: Optional[str] = None                           # замаскированный VIN
+    specs: Optional[str] = None                         # двигатель · привод · топливо · цвет
 
 
 @dataclass
@@ -41,9 +50,14 @@ class SearchFilter:
     transmission: Optional[str] = None
     body_type: Optional[str] = None
     sources: list[str] = field(default_factory=lambda: ["autoru", "drom"])
-    # Диапазон даты аукциона — используется только источником copart
+    # ── Поля, которые использует только источник copart ───────────────────────
     auction_date_from: Optional[datetime.date] = None
     auction_date_to: Optional[datetime.date] = None
+    title_groups: list[str] = field(default_factory=list)    # C / S / J
+    damage_exclude: list[str] = field(default_factory=list)  # коды: BN, WA, BC…
+    yards: list[str] = field(default_factory=list)           # штаты площадок: FL, TX…
+    run_and_drive: Optional[bool] = None                     # только «на ходу»
+    buy_now_only: Optional[bool] = None                      # только «купить сразу»
 
     @classmethod
     def from_record(cls, record) -> "SearchFilter":
@@ -73,6 +87,11 @@ class SearchFilter:
             sources=list(record["sources"] or ["autoru", "drom"]),
             auction_date_from=opt("auction_date_from"),
             auction_date_to=opt("auction_date_to"),
+            title_groups=list(opt("title_groups") or []),
+            damage_exclude=list(opt("damage_exclude") or []),
+            yards=list(opt("yards") or []),
+            run_and_drive=opt("run_and_drive"),
+            buy_now_only=opt("buy_now_only"),
         )
 
 
