@@ -75,6 +75,11 @@ PAGE_SIZE = 100     # максимум, который отдаёт endpoint з�
 MAX_PAGES = 3       # 300 лотов на фильтр — дальше уже неактуальные торги
 TIMEOUT   = aiohttp.ClientTimeout(total=45)
 
+# Сколько лотов максимум забираем по одному фильтру за обход.
+# Отдельная константа, чтобы снаружи не пересчитывать произведение —
+# в bot/handlers.py свои PAGE_SIZE и MAX_PAGES для пагинации меню.
+FETCH_LIMIT = PAGE_SIZE * MAX_PAGES
+
 # Copart отдаёт одну картинку в трёх размерах — отличается только суффикс:
 #   _thb ~5 КБ (превью)   _ful ~78 КБ (обычное)   _hrs ~270 КБ (высокое)
 # В API приходит _thb; для карточек берём _ful — читаемо и не тяжело.
@@ -508,6 +513,73 @@ async def _fetch_pages(session, f: SearchFilter, with_model: bool) -> list[dict]
     return raw_lots
 
 
+# ── Справочники марок и моделей ───────────────────────────────────────────────
+#
+# Copart возвращает facetFields в каждом ответе поиска, причём группа MODL
+# сужается под выбранную марку. Значит, список можно не угадывать и не хранить
+# захардкоженным, а брать прямо у аукциона — с числом лотов по каждой позиции.
+# Facet отдаёт максимум 400 значений, этого хватает с большим запасом.
+
+_FACET_TTL = 6 * 3600           # справочник меняется медленно
+_facet_cache: dict[str, tuple[float, list[tuple[str, int]]]] = {}
+
+
+def _facet_values(results: dict, code: str) -> list[tuple[str, int]]:
+    """Из facetFields достаём пары (значение, количество лотов)."""
+    groups = [g for g in (results.get("facetFields") or [])
+              if g.get("quickPickCode") == code]
+    if not groups:
+        return []
+    out = []
+    for fc in groups[0].get("facetCounts", []):
+        query = fc.get("query", "")
+        if ":" not in query:
+            continue
+        value = query.split(":", 1)[1].strip('"').strip()
+        if value:
+            out.append((value, fc.get("count", 0)))
+    # Самые ходовые — наверх, по ним и выбирают
+    return sorted(out, key=lambda x: -x[1])
+
+
+async def _fetch_facet(cache_key: str, code: str, flt: dict) -> list[tuple[str, int]]:
+    now = asyncio.get_event_loop().time()
+    cached = _facet_cache.get(cache_key)
+    if cached and now - cached[0] < _FACET_TTL:
+        return cached[1]
+
+    payload = {
+        "query": ["*"], "filter": flt, "sort": ["auction_date_type asc"],
+        "page": 0, "size": 1, "start": 0, "watchListOnly": False,
+        "freeFormSearch": False, "hideImages": True, "defaultSort": False,
+        "specificRowProvided": False, "displayName": "", "searchName": "",
+        "backPage": "search",
+    }
+    async with aiohttp.ClientSession() as session:
+        results = await _post(session, payload)
+    if not results:
+        return cached[1] if cached else []
+
+    values = _facet_values(results, code)
+    if values:
+        _facet_cache[cache_key] = (now, values)
+    return values
+
+
+async def fetch_makes() -> list[tuple[str, int]]:
+    """Марки, реально представленные на аукционе, с количеством лотов."""
+    return await _fetch_facet("MAKE", "MAKE", {})
+
+
+async def fetch_models(make: str) -> list[tuple[str, int]]:
+    """Модели выбранной марки — список сужается фильтром MAKE."""
+    make = (make or "").strip().upper()
+    if not make:
+        return []
+    values = [f'lot_make_desc:"{v}"' for v in _make_values(make)]
+    return await _fetch_facet(f"MODL:{make}", "MODL", {"MAKE": values})
+
+
 # ── Парсер ────────────────────────────────────────────────────────────────────
 
 class CopartParser(BaseParser):
@@ -558,3 +630,50 @@ class CopartParser(BaseParser):
 
         logger.info(f"copart: фильтр «{f.name}» → {len(listings)} лотов")
         return listings
+
+    async def preview(self, f: SearchFilter, sample_size: int = 3) -> dict:
+        """
+        Быстрая прикидка «что найдётся» — один запрос, без сохранения.
+        Нужна, чтобы не ждать обхода, чтобы понять: фильтр пустой или слишком широкий.
+
+        total   — сколько лотов у аукциона по запросу
+        matched — сколько из первой сотни прошло наши фильтры цены и модели
+        sample  — примеры лотов
+        """
+        if f.brand and f.brand.strip().upper() in MAKES_NOT_ON_COPART:
+            return {"total": 0, "matched": 0, "sample": [],
+                    "note": f"Марки «{f.brand}» на аукционе нет — это рынок США"}
+
+        async with aiohttp.ClientSession() as session:
+            results = await _post(session, _build_payload(f, 0, with_model=True))
+            model_client_side = False
+
+            # Точного совпадения по модели нет — пробуем по марке с отбором у себя
+            if f.model and results is not None and not (results.get("content") or []):
+                results = await _post(session, _build_payload(f, 0, with_model=False))
+                model_client_side = True
+
+        if results is None:
+            return {"total": 0, "matched": 0, "sample": [],
+                    "note": "Аукцион не ответил, попробуй ещё раз"}
+
+        total = results.get("totalElements", 0)
+        checked = 0
+        matched: list[Listing] = []
+
+        for raw in (results.get("content") or []):
+            checked += 1
+            try:
+                lot = _parse_lot(raw, f.name)
+            except Exception:
+                continue
+            if lot and _matches(lot, f, model_client_side):
+                matched.append(lot)
+
+        return {
+            "total":   total,
+            "checked": checked,
+            "matched": len(matched),
+            "sample":  matched[:sample_size],
+            "note":    "",
+        }

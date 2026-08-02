@@ -25,8 +25,9 @@ os.environ.setdefault("USD_RUB_RATE", "90")
 
 from parsers.base import SearchFilter                      # noqa: E402
 from parsers.copart import (                               # noqa: E402
-    _parse_lot, _build_filter, _matches, _price_bounds_usd,
+    _parse_lot, _build_filter, _matches, _price_bounds_usd, _facet_values,
     damage_ru, title_ru, keys_ru, DAMAGE, DAMAGE_CODES, DAMAGE_RU,
+    FETCH_LIMIT, PAGE_SIZE, MAX_PAGES,
 )
 
 FIXTURE = json.loads(
@@ -187,6 +188,32 @@ def test_translations_have_fallback():
     assert damage_ru(None) == ""
     assert "Salvage" in title_ru("SALVAGE TITLE")
     assert keys_ru("YES") and keys_ru(None) == ""
+
+
+# ── Справочники из facetFields ────────────────────────────────────────────────
+
+def test_facet_values_parsed_and_sorted():
+    """Марки и модели берём из facetFields, самые ходовые — первыми."""
+    results = {"facetFields": [{
+        "quickPickCode": "MAKE",
+        "facetCounts": [
+            {"query": 'lot_make_desc:"HONDA"',  "count": 100},
+            {"query": 'lot_make_desc:"TOYOTA"', "count": 500},
+            {"query": "мусор без двоеточия",     "count": 1},
+            {"query": 'lot_make_desc:""',        "count": 0},
+        ],
+    }]}
+    assert _facet_values(results, "MAKE") == [("TOYOTA", 500), ("HONDA", 100)]
+
+
+def test_facet_values_missing_group():
+    assert _facet_values({"facetFields": []}, "MODL") == []
+    assert _facet_values({}, "MAKE") == []
+
+
+def test_fetch_limit_matches_paging():
+    """FETCH_LIMIT показывается пользователю в предпросмотре — не должен разъехаться."""
+    assert FETCH_LIMIT == PAGE_SIZE * MAX_PAGES == 300
 
 
 if __name__ == "__main__":

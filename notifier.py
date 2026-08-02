@@ -6,7 +6,7 @@ from aiogram.enums import ParseMode
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 import datetime
-from config import OWNER_ID, USD_RUB_RATE
+from config import OWNER_ID, USD_RUB_RATE, MAX_NOTIFY_PER_RUN, WEBHOOK_HOST
 from parsers.base import Listing
 from parsers.copart import damage_ru, title_ru, keys_ru
 from db.repository import (
@@ -273,15 +273,31 @@ def _is_quiet_hours(quiet_from: int, quiet_to: int) -> bool:
     return quiet_from <= hour < quiet_to
 
 
+def _overflow_message(hidden: int, filter_name: Optional[str]) -> str:
+    """Сводка по объявлениям, которые не стали слать в чат."""
+    word = "объявление" if hidden == 1 else "объявления" if hidden < 5 else "объявлений"
+    src = f" по фильтру «{filter_name}»" if filter_name else ""
+    return (
+        f"📦 <b>Ещё {hidden} {word}</b>{src}\n\n"
+        f"Показал только первые {MAX_NOTIFY_PER_RUN}, чтобы не заваливать чат. "
+        f"Остальные уже сохранены — открой Mini App или сузь фильтр."
+    )
+
+
 async def process_listings(
     bot: Bot,
     listings: list[Listing],
     chat_id: int = OWNER_ID,
+    max_send: int = MAX_NOTIFY_PER_RUN,
 ) -> int:
-    new_count = 0
     settings = await get_notification_settings(chat_id)
     quiet = _is_quiet_hours(settings.get("quiet_from", 23), settings.get("quiet_to", 8))
     threshold = settings.get("price_threshold")
+
+    # Сначала сохраняем всё новое, отправляем — вторым проходом.
+    # Иначе при обрыве на середине часть объявлений осталась бы «невиденной»
+    # и прилетела бы повторно на следующем обходе.
+    fresh: list[Listing] = []
 
     for listing in listings:
         # Проверяем порог цены. Порог задаётся в рублях, а лоты Copart —
@@ -297,15 +313,17 @@ async def process_listings(
         if listing.price:
             await record_price(listing.source, listing.external_id, listing.price)
 
-        if not is_new:
-            continue
+        if is_new:
+            fresh.append(listing)
 
-        new_count += 1
+    new_count = len(fresh)
 
-        # В тихие часы не отправляем (но считаем)
-        if quiet:
-            continue
+    # В тихие часы не отправляем (но считаем)
+    if quiet or not fresh:
+        return new_count
 
+    to_send = fresh[:max_send]
+    for listing in to_send:
         # Считаем после mark_seen — текущая запись исключается по external_id
         relists = 0
         if listing.source == "copart" and listing.vin:
@@ -316,6 +334,24 @@ async def process_listings(
 
         await send_listing(bot, listing, chat_id=chat_id, relists=relists)
         await asyncio.sleep(SEND_DELAY)
+
+    hidden = new_count - len(to_send)
+    if hidden:
+        logger.info(f"notifier: показано {len(to_send)}, скрыто {hidden}")
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=_overflow_message(hidden, fresh[0].filter_name),
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(
+                        text="🚀 Открыть Mini App",
+                        web_app={"url": f"{WEBHOOK_HOST}/miniapp"},
+                    ),
+                ]]),
+            )
+        except Exception as e:
+            logger.error(f"notifier: не отправлена сводка: {e}")
 
     return new_count
 
