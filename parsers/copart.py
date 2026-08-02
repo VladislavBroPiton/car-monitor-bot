@@ -225,6 +225,14 @@ def _make_values(brand: str) -> list[str]:
 KM_IN_MILE = 1.60934
 
 
+def _is_native(f: SearchFilter) -> bool:
+    """
+    Отдельный фильтр Copart — значения уже в «родных» единицах аукциона:
+    цена в долларах, пробег в милях. У общего фильтра — рубли и километры.
+    """
+    return getattr(f, "kind", "ru") == "copart"
+
+
 def _km_to_miles(km: Optional[int]) -> Optional[int]:
     """Границы пробега из фильтра (км) → мили, как их хранит Copart."""
     if not km:
@@ -258,12 +266,13 @@ def _build_filter(f: SearchFilter, with_model: bool = True) -> dict:
     if f.year_from or f.year_to:
         flt["YEAR"] = [f"lot_year:{_solr_range(f.year_from, f.year_to)}"]
 
-    # Пробег в фильтре задаётся в километрах, одометр Copart — в милях
+    # В отдельном фильтре Copart пробег вводится сразу в милях,
+    # в общем — в километрах, поэтому там переводим
     if f.mileage_from or f.mileage_to:
-        flt["ODM"] = [
-            f"odometer_reading_received:"
-            f"{_solr_range(_km_to_miles(f.mileage_from), _km_to_miles(f.mileage_to))}"
-        ]
+        lo, hi = f.mileage_from, f.mileage_to
+        if not _is_native(f):
+            lo, hi = _km_to_miles(lo), _km_to_miles(hi)
+        flt["ODM"] = [f"odometer_reading_received:{_solr_range(lo, hi)}"]
 
     date_expr = _date_range(f)
     if date_expr:
@@ -411,9 +420,11 @@ def _parse_lot(raw: dict, filter_name: str) -> Optional[Listing]:
 
 def _price_bounds_usd(f: SearchFilter) -> tuple[Optional[int], Optional[int]]:
     """
-    Цена в фильтрах задаётся в рублях (как для Auto.ru/Авито),
-    а лоты Copart — в долларах. Переводим границы по курсу USD_RUB_RATE.
+    В отдельном фильтре Copart цена сразу в долларах — берём как есть.
+    В общем фильтре она в рублях, переводим по курсу USD_RUB_RATE.
     """
+    if _is_native(f):
+        return f.price_from, f.price_to
     rate = USD_RUB_RATE or 1
     lo = int(f.price_from / rate) if f.price_from else None
     hi = int(f.price_to   / rate) if f.price_to   else None
@@ -422,9 +433,11 @@ def _price_bounds_usd(f: SearchFilter) -> tuple[Optional[int], Optional[int]]:
 
 def _matches(listing: Listing, f: SearchFilter, model_client_side: bool) -> bool:
     lo, hi = _price_bounds_usd(f)
-    if lo and (listing.price is None or listing.price < lo):
+    # У лотов «купить сразу» оценочной стоимости часто нет — тогда судим по ней
+    effective = listing.price or listing.buy_now_price
+    if lo and (effective is None or effective < lo):
         return False
-    if hi and (listing.price is None or listing.price > hi):
+    if hi and (effective is None or effective > hi):
         return False
 
     # Модель не прошла точным facet-фильтром — ищем подстроку в заголовке
@@ -501,7 +514,9 @@ class CopartParser(BaseParser):
     SOURCE = "copart"
 
     async def search(self, f: SearchFilter) -> list[Listing]:
-        if "copart" not in f.sources:
+        # Отдельный фильтр Copart работает всегда; общий — только если
+        # аукцион явно выбран в источниках
+        if not _is_native(f) and "copart" not in f.sources:
             return []
 
         if f.brand and f.brand.strip().upper() in MAKES_NOT_ON_COPART:

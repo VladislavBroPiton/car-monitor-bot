@@ -113,10 +113,22 @@ async def api_listings(page: int = 1, source: str = "", limit: int = 20):
 # ── Copart ────────────────────────────────────────────────────────────────────
 
 @router.get("/copart/listings")
-async def api_copart_listings(page: int = 1, limit: int = 20, sort: str = "date"):
+async def api_copart_listings(
+    page: int = 1,
+    limit: int = 20,
+    sort: str = "date",
+    q: str = "",
+    clean: bool = False,
+    rnd: bool = False,
+    buynow: bool = False,
+    keys: bool = False,
+):
     """
     Лоты аукциона Copart. Цены — в долларах (валюта торгов),
     пробег — в милях, auction_date — дата ближайших торгов.
+
+    Фильтры применяются в SQL, а не по загруженной странице, иначе
+    «на ходу» отбирал бы только среди 20 видимых лотов.
     """
     pool = await get_pool()
     offset = (page - 1) * limit
@@ -130,15 +142,36 @@ async def api_copart_listings(page: int = 1, limit: int = 20, sort: str = "date"
         "auction_soon": "auction_date ASC NULLS LAST",
     }.get(sort, "created_at DESC")
 
+    where = ["source = 'copart'"]
+    params: list = []
+
+    if q.strip():
+        params.append(f"%{q.strip().upper()}%")
+        where.append(
+            f"(UPPER(title) LIKE ${len(params)} OR UPPER(city) LIKE ${len(params)}"
+            f" OR external_id LIKE ${len(params)} OR vin LIKE ${len(params)})"
+        )
+    if clean:
+        where.append("UPPER(title_group) = 'CLEAN TITLE'")
+    if rnd:
+        where.append("run_and_drive IS TRUE")
+    if buynow:
+        where.append("buy_now_price IS NOT NULL AND buy_now_price > 0")
+    if keys:
+        where.append("(has_keys IS NULL OR UPPER(has_keys) <> 'NO')")
+
+    where_sql = " AND ".join(where)
+
     try:
+        total = await pool.fetchval(
+            f"SELECT COUNT(*) FROM seen_listings WHERE {where_sql}", *params
+        )
         rows = await pool.fetch(
             f"""SELECT * FROM seen_listings
-                WHERE source = 'copart'
-                ORDER BY {order} LIMIT $1 OFFSET $2""",
-            limit, offset,
-        )
-        total = await pool.fetchval(
-            "SELECT COUNT(*) FROM seen_listings WHERE source = 'copart'"
+                WHERE {where_sql}
+                ORDER BY {order}
+                LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}""",
+            *params, limit, offset,
         )
     except Exception as e:
         logger.error(f"api_copart_listings error: {e}")
@@ -159,6 +192,32 @@ async def api_copart_listings(page: int = 1, limit: int = 20, sort: str = "date"
     }
 
 
+@router.get("/copart/stats")
+async def api_copart_stats(group: str = "model"):
+    """Разброс оценочных стоимостей по накопленным лотам."""
+    from db.repository import copart_price_stats
+    rows = await copart_price_stats(group)
+    return [dict(r) for r in rows]
+
+
+@router.get("/copart/cost/{external_id}")
+async def api_copart_cost(external_id: str):
+    """Прикидка стоимости «под ключ» по сохранённому лоту."""
+    from costs import estimate
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        """SELECT title, price, buy_now_price FROM seen_listings
+           WHERE source = 'copart' AND external_id = $1""",
+        external_id,
+    )
+    if not row:
+        return {"ok": False, "error": "not_found"}
+    breakdown = estimate(row["buy_now_price"] or row["price"])
+    if not breakdown:
+        return {"ok": False, "error": "no_price"}
+    return {"ok": True, "title": row["title"], **breakdown.as_dict()}
+
+
 # ── Filters ───────────────────────────────────────────────────────────────────
 
 @router.get("/filters")
@@ -167,6 +226,7 @@ async def api_filters():
     return [{
         "id":           f["id"],
         "name":         f["name"],
+        "kind":         f["kind"] or "ru",
         "brand":        f["brand"],
         "model":        f["model"],
         "year_from":    f["year_from"],
@@ -181,6 +241,11 @@ async def api_filters():
         "sources":      list(f["sources"] or []),
         "auction_date_from": str(f["auction_date_from"]) if f["auction_date_from"] else None,
         "auction_date_to":   str(f["auction_date_to"])   if f["auction_date_to"]   else None,
+        "title_groups":   list(f["title_groups"]   or []),
+        "damage_exclude": list(f["damage_exclude"] or []),
+        "yards":          list(f["yards"]          or []),
+        "run_and_drive":  f["run_and_drive"],
+        "buy_now_only":   f["buy_now_only"],
         "is_active":    f["is_active"],
     } for f in filters]
 

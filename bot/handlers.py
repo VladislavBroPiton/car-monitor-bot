@@ -21,7 +21,13 @@ from db.repository import (
     toggle_filter,
     update_filter_field,
     get_pool,
+    add_favorite_from_seen,
+    is_favorite,
+    find_lots,
+    get_relist_history,
+    copart_price_stats,
 )
+from costs import estimate, format_breakdown
 from parsers.copart import (
     damage_ru,
     title_ru,
@@ -30,6 +36,7 @@ from parsers.copart import (
     DAMAGE_CODES,
     DAMAGE_JUNK,
     YARD_STATES,
+    MAKES_NOT_ON_COPART,
 )
 
 logger = logging.getLogger(__name__)
@@ -58,6 +65,25 @@ class FilterForm(StatesGroup):
 class EditForm(StatesGroup):
     choosing_field = State()
     entering_value = State()
+
+
+class CopartForm(StatesGroup):
+    """Отдельный мастер для аукциона: доллары, мили, без городов."""
+    name       = State()
+    brand      = State()
+    model      = State()
+    year_from  = State()
+    year_to    = State()
+    price_from = State()
+    price_to   = State()
+    mileage_to = State()
+    titles     = State()   # тип документа, множественный выбор
+    damage     = State()   # исключаемые повреждения
+    yards      = State()   # штаты площадок
+    options    = State()   # на ходу / купить сразу
+
+
+COPART_STEPS = 12
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -289,7 +315,10 @@ def _main_menu_kb() -> InlineKeyboardMarkup:
         )],
         [InlineKeyboardButton(text="📋 Мои фильтры",   callback_data="filters_list:0")],
         [InlineKeyboardButton(text="➕ Новый фильтр",  callback_data="filter_add")],
-        [InlineKeyboardButton(text="🟡 Copart",        callback_data="copart_lots:0")],
+        [
+            InlineKeyboardButton(text="🟡 Copart",       callback_data="copart_lots:0"),
+            InlineKeyboardButton(text="➕🟡 Фильтр",     callback_data="copart_add"),
+        ],
         [InlineKeyboardButton(text="📊 Статистика",    callback_data="show_status")],
     ])
 
@@ -303,7 +332,9 @@ def _filters_kb(filters: list, page: int = 0) -> InlineKeyboardMarkup:
     rows = []
     for f in chunk:
         icon  = "✅" if f["is_active"] else "⏸"
-        label = f"{icon} {f['name']}"
+        # Фильтры аукциона помечаем отдельно — у них своя семантика полей
+        kind_icon = "🟡 " if _is_copart_filter(f) else ""
+        label = f"{icon} {kind_icon}{f['name']}"
         if f["brand"]:
             label += f"  ({f['brand']}"
             label += f" {f['model']}" if f["model"] else ""
@@ -347,8 +378,41 @@ def _filter_detail_kb(filter_id: int, is_active: bool) -> InlineKeyboardMarkup:
     ])
 
 
-def _edit_menu_kb(filter_id: int) -> InlineKeyboardMarkup:
+def _edit_menu_kb(filter_id: int, is_copart: bool = False) -> InlineKeyboardMarkup:
     """Меню выбора поля для редактирования."""
+    if is_copart:
+        # У фильтра аукциона свой набор: без городов, КПП, кузова и источников
+        copart_only = [
+            ("📌 Название",     "name"),
+            ("🚗 Марка",        "brand"),
+            ("🔠 Модель",       "model"),
+            ("📅 Год от",       "year_from"),
+            ("📅 Год до",       "year_to"),
+            ("💰 Цена от, $",   "price_from"),
+            ("💰 Цена до, $",   "price_to"),
+            ("🛣 Пробег, миль", "mileage_to"),
+            ("📄 Документ",     "title_groups"),
+            ("💥 Исключить",    "damage_exclude"),
+            ("🏁 Площадки",     "yards"),
+            ("🚀 На ходу",      "run_and_drive"),
+            ("⚡️ Купить сразу", "buy_now_only"),
+            ("🗓 Аукцион с",    "auction_date_from"),
+            ("🗓 Аукцион по",   "auction_date_to"),
+        ]
+        rows = []
+        for i in range(0, len(copart_only), 2):
+            row = [InlineKeyboardButton(
+                text=copart_only[i][0],
+                callback_data=f"edit_field:{filter_id}:{copart_only[i][1]}")]
+            if i + 1 < len(copart_only):
+                row.append(InlineKeyboardButton(
+                    text=copart_only[i + 1][0],
+                    callback_data=f"edit_field:{filter_id}:{copart_only[i + 1][1]}"))
+            rows.append(row)
+        rows.append([InlineKeyboardButton(text="◀️ Назад",
+                                          callback_data=f"filter_info:{filter_id}")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
     fields = [
         ("📌 Название",    "name"),
         ("🚗 Марка",       "brand"),
@@ -541,7 +605,14 @@ def _models_kb(brand: str) -> InlineKeyboardMarkup:
 
 # ── Форматирование карточки фильтра ───────────────────────────────────────────
 
+def _is_copart_filter(f) -> bool:
+    return (_opt(f, "kind") or "ru") == "copart"
+
+
 def _render_filter(f) -> str:
+    if _is_copart_filter(f):
+        return _render_copart_filter(f)
+
     status = "✅ Активен" if f["is_active"] else "⏸ Приостановлен"
     srcs   = "  ".join(SOURCE_LABELS.get(s, s) for s in (f["sources"] or []))
 
@@ -598,6 +669,68 @@ def _render_filter(f) -> str:
 
     lines.append(f"<code>{'─' * 24}</code>")
     lines.append(f"📡 {srcs}")
+    lines.append(f"🔘 {status}")
+    return "\n".join(lines)
+
+
+def _render_copart_filter(f) -> str:
+    """Карточка отдельного фильтра аукциона: доллары, мили, без городов."""
+    status = "✅ Активен" if f["is_active"] else "⏸ Приостановлен"
+
+    def usd(v):
+        return "$" + f"{v:,}".replace(",", " ") if v else "—"
+
+    lines = [
+        f"🟡 <b>{f['name']}</b>",
+        "<i>фильтр аукциона Copart</i>",
+        f"<code>{'─' * 24}</code>",
+    ]
+
+    if f["brand"] or f["model"]:
+        car = " ".join(filter(None, [f["brand"], f["model"]]))
+        lines.append(f"🚗 <b>Марка/Модель:</b>  {car}")
+
+    yf, yt = f["year_from"], f["year_to"]
+    if yf or yt:
+        lines.append(f"📅 <b>Год:</b>  {yf or '—'} – {yt or '—'}")
+
+    pf, pt = f["price_from"], f["price_to"]
+    if pf or pt:
+        lines.append(f"💰 <b>Цена:</b>  {usd(pf)} – {usd(pt)}")
+
+    mt = f["mileage_to"]
+    if mt:
+        miles = f"{mt:,}".replace(",", " ")
+        lines.append(f"🛣 <b>Пробег до:</b>  {miles} миль  "
+                     f"<i>(≈{int(mt * 1.60934):,} км)</i>".replace(",", " "))
+
+    titles = list(_opt(f, "title_groups") or [])
+    if titles:
+        names = [TITLE_GROUPS[c][1] for c in titles if c in TITLE_GROUPS]
+        lines.append(f"📄 <b>Документ:</b>  {', '.join(names)}")
+
+    excluded = list(_opt(f, "damage_exclude") or [])
+    if excluded:
+        names = [DAMAGE_CODES[c][1] for c in excluded if c in DAMAGE_CODES]
+        lines.append(f"💥 <b>Исключено:</b>  {', '.join(names)}")
+
+    yards = list(_opt(f, "yards") or [])
+    if yards:
+        lines.append(f"🏁 <b>Площадки:</b>  {', '.join(yards)}")
+
+    af, at = _opt(f, "auction_date_from"), _opt(f, "auction_date_to")
+    if af or at:
+        lines.append(f"🗓 <b>Аукцион:</b>  {af or '—'} – {at or '—'}")
+
+    flags = []
+    if _opt(f, "run_and_drive"):
+        flags.append("🚀 только на ходу")
+    if _opt(f, "buy_now_only"):
+        flags.append("⚡️ только «купить сразу»")
+    if flags:
+        lines.append("  ·  ".join(flags))
+
+    lines.append(f"<code>{'─' * 24}</code>")
     lines.append(f"🔘 {status}")
     return "\n".join(lines)
 
@@ -878,10 +1011,12 @@ async def cb_filter_edit(call: CallbackQuery):
     if not f:
         await call.answer("Фильтр не найден", show_alert=True)
         return
+    is_cp = _is_copart_filter(f)
+    head = "🟡 " if is_cp else "✏️ "
     await call.message.edit_text(
-        f"✏️ <b>Редактирование: «{f['name']}»</b>\n\nЧто хочешь изменить?",
+        f"{head}<b>Редактирование: «{f['name']}»</b>\n\nЧто хочешь изменить?",
         parse_mode="HTML",
-        reply_markup=_edit_menu_kb(filter_id),
+        reply_markup=_edit_menu_kb(filter_id, is_copart=is_cp),
     )
     await call.answer()
 
@@ -1634,6 +1769,523 @@ async def _finish_filter(msg, state: FSMContext, sources: list, from_call: bool)
         await msg.answer(text, parse_mode="HTML", reply_markup=kb)
 
 
+# ── Мастер фильтра Copart ─────────────────────────────────────────────────────
+
+def _cp_step(n: int, title: str, hint: str) -> str:
+    bar = "▓" * n + "░" * (COPART_STEPS - n)
+    return (
+        f"🟡 <b>Новый фильтр Copart</b>\n"
+        f"<b>{title}</b>\n"
+        f"<code>{bar}</code>  {n}/{COPART_STEPS}\n"
+        f"<i>«-» — пропустить</i>\n\n"
+        f"{hint}"
+    )
+
+
+def _cp_multi_kb(options: list[tuple[str, str]], selected: list[str],
+                 per_row: int = 2, presets: list = None) -> InlineKeyboardMarkup:
+    """Клавиатура множественного выбора внутри мастера."""
+    rows = []
+    for i in range(0, len(options), per_row):
+        row = []
+        for code, label in options[i:i + per_row]:
+            mark = "✅ " if code in selected else "▫️ "
+            row.append(InlineKeyboardButton(text=f"{mark}{label}",
+                                            callback_data=f"cpw_tog:{code}"))
+        rows.append(row)
+    for preset in (presets or []):
+        rows.append([InlineKeyboardButton(text=preset[0], callback_data=preset[1])])
+    rows.append([
+        InlineKeyboardButton(text="⏭ Пропустить", callback_data="cpw_skip"),
+        InlineKeyboardButton(text="▶️ Далее",     callback_data="cpw_next"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@router.callback_query(F.data == "copart_add")
+async def cb_copart_add(call: CallbackQuery, state: FSMContext):
+    if not _is_owner(call.from_user.id):
+        await call.answer("⛔", show_alert=True)
+        return
+    await state.clear()
+    await state.set_state(CopartForm.name)
+    await call.message.edit_text(
+        _cp_step(1, "Шаг 1 — Название",
+                 "Как назовём фильтр?\nНапример: <code>Camry на ходу</code>"),
+        parse_mode="HTML",
+    )
+    await call.answer()
+
+
+@router.message(StateFilter(CopartForm.name))
+async def cpw_name(message: Message, state: FSMContext):
+    await state.update_data(name=message.text.strip()[:64])
+    await state.set_state(CopartForm.brand)
+    await message.answer(
+        _cp_step(2, "Шаг 2 — Марка",
+                 "Выбери из списка или отправь текстом <b>латиницей</b>, "
+                 "как на аукционе: <code>TOYOTA</code>"),
+        parse_mode="HTML",
+        reply_markup=_brands_kb(),
+    )
+
+
+@router.callback_query(F.data.startswith("fsm_brand:"), StateFilter(CopartForm.brand))
+async def cpw_brand_btn(call: CallbackQuery, state: FSMContext):
+    brand = call.data.split(":", 1)[1]
+    await _cpw_set_brand(call.message, state, None if brand == "-" else brand, edit=True)
+    await call.answer()
+
+
+@router.message(StateFilter(CopartForm.brand))
+async def cpw_brand_text(message: Message, state: FSMContext):
+    raw = message.text.strip().upper()
+    await _cpw_set_brand(message, state, None if raw == "-" else raw, edit=False)
+
+
+async def _cpw_set_brand(msg, state: FSMContext, brand, edit: bool):
+    await state.update_data(brand=brand)
+    await state.set_state(CopartForm.model)
+
+    warn = ""
+    if brand and brand in MAKES_NOT_ON_COPART:
+        warn = (f"\n\n⚠️ <b>{brand}</b> на Copart не встречается — "
+                f"это рынок США. Фильтр создастся, но лотов не будет.")
+
+    text = _cp_step(3, "Шаг 3 — Модель",
+                    "Отправь модель латиницей, например <code>CAMRY</code>.\n"
+                    "<i>Если такой модели нет в справочнике Copart, "
+                    "бот отберёт по названию лота.</i>" + warn)
+    if edit:
+        await msg.edit_text(text, parse_mode="HTML")
+    else:
+        await msg.answer(text, parse_mode="HTML")
+
+
+@router.message(StateFilter(CopartForm.model))
+async def cpw_model(message: Message, state: FSMContext):
+    raw = message.text.strip().upper()
+    await state.update_data(model=None if raw == "-" else raw)
+    await state.set_state(CopartForm.year_from)
+    await message.answer(
+        _cp_step(4, "Шаг 4 — Год от", "Например: <code>2015</code>"),
+        parse_mode="HTML",
+    )
+
+
+@router.message(StateFilter(CopartForm.year_from))
+async def cpw_year_from(message: Message, state: FSMContext):
+    val = _parse_int_or_none(message.text)
+    if val is False:
+        await message.answer("⚠️ Введи число или «-»")
+        return
+    await state.update_data(year_from=val)
+    await state.set_state(CopartForm.year_to)
+    await message.answer(
+        _cp_step(5, "Шаг 5 — Год до", "Например: <code>2022</code>"),
+        parse_mode="HTML",
+    )
+
+
+@router.message(StateFilter(CopartForm.year_to))
+async def cpw_year_to(message: Message, state: FSMContext):
+    val = _parse_int_or_none(message.text)
+    if val is False:
+        await message.answer("⚠️ Введи число или «-»")
+        return
+    await state.update_data(year_to=val)
+    await state.set_state(CopartForm.price_from)
+    await message.answer(
+        _cp_step(6, "Шаг 6 — Цена от, $",
+                 "Цена <b>в долларах</b> — так же, как на аукционе.\n"
+                 "Например: <code>3000</code>\n\n"
+                 "<i>Это оценочная стоимость лота либо цена «купить сразу», "
+                 "а не текущая ставка — ставки Copart показывает "
+                 "только зарегистрированным.</i>"),
+        parse_mode="HTML",
+    )
+
+
+@router.message(StateFilter(CopartForm.price_from))
+async def cpw_price_from(message: Message, state: FSMContext):
+    val = _parse_int_or_none(message.text)
+    if val is False:
+        await message.answer("⚠️ Введи число или «-»")
+        return
+    await state.update_data(price_from=val)
+    await state.set_state(CopartForm.price_to)
+    await message.answer(
+        _cp_step(7, "Шаг 7 — Цена до, $", "Например: <code>12000</code>"),
+        parse_mode="HTML",
+    )
+
+
+@router.message(StateFilter(CopartForm.price_to))
+async def cpw_price_to(message: Message, state: FSMContext):
+    val = _parse_int_or_none(message.text)
+    if val is False:
+        await message.answer("⚠️ Введи число или «-»")
+        return
+    await state.update_data(price_to=val)
+    await state.set_state(CopartForm.mileage_to)
+    await message.answer(
+        _cp_step(8, "Шаг 8 — Пробег до, миль",
+                 "Одометр на аукционе <b>в милях</b>, поэтому и здесь мили.\n"
+                 "Например: <code>90000</code>  (это примерно 145 000 км)"),
+        parse_mode="HTML",
+    )
+
+
+@router.message(StateFilter(CopartForm.mileage_to))
+async def cpw_mileage_to(message: Message, state: FSMContext):
+    val = _parse_int_or_none(message.text)
+    if val is False:
+        await message.answer("⚠️ Введи число или «-»")
+        return
+    await state.update_data(mileage_to=val, cp_sel=[])
+    await state.set_state(CopartForm.titles)
+    options = [(c, label) for c, (_, label) in TITLE_GROUPS.items()]
+    await message.answer(
+        _cp_step(9, "Шаг 9 — Тип документа",
+                 "Отметь подходящие. Ничего не отмечено — берём любые.\n\n"
+                 "<i>Документ определяет, можно ли машину восстановить "
+                 "и поставить на учёт.</i>"),
+        parse_mode="HTML",
+        reply_markup=_cp_multi_kb(options, [], per_row=1),
+    )
+
+
+@router.callback_query(F.data.startswith("cpw_tog:"))
+async def cpw_toggle(call: CallbackQuery, state: FSMContext):
+    code = call.data.split(":", 1)[1]
+    data = await state.get_data()
+    sel = list(data.get("cp_sel", []))
+    if code in sel:
+        sel.remove(code)
+    else:
+        sel.append(code)
+    await state.update_data(cp_sel=sel)
+    await _cpw_redraw(call, state, sel)
+    await call.answer()
+
+
+@router.callback_query(F.data == "cpw_preset_junk")
+async def cpw_preset(call: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    sel = list(data.get("cp_sel", []))
+    for code in DAMAGE_JUNK:
+        if code not in sel:
+            sel.append(code)
+    await state.update_data(cp_sel=sel)
+    await _cpw_redraw(call, state, sel)
+    await call.answer("Отмечено")
+
+
+async def _cpw_redraw(call: CallbackQuery, state: FSMContext, sel: list[str]):
+    """Перерисовать текущий шаг множественного выбора."""
+    current = await state.get_state()
+    if current == CopartForm.titles.state:
+        options, per_row, presets = (
+            [(c, label) for c, (_, label) in TITLE_GROUPS.items()], 1, None)
+    elif current == CopartForm.damage.state:
+        options = sorted(((c, label) for c, (_, label) in DAMAGE_CODES.items()),
+                         key=lambda x: x[1])
+        per_row, presets = 2, [("🗑 Отметить пожары, потоп и химию", "cpw_preset_junk")]
+    elif current == CopartForm.yards.state:
+        options, per_row, presets = [(s, s) for s in YARD_STATES], 5, None
+    else:
+        return
+    try:
+        await call.message.edit_reply_markup(
+            reply_markup=_cp_multi_kb(options, sel, per_row, presets))
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data.in_({"cpw_next", "cpw_skip"}))
+async def cpw_advance(call: CallbackQuery, state: FSMContext):
+    """Сохранить выбор текущего шага и перейти к следующему."""
+    data = await state.get_data()
+    sel = [] if call.data == "cpw_skip" else list(data.get("cp_sel", []))
+    current = await state.get_state()
+
+    if current == CopartForm.titles.state:
+        await state.update_data(title_groups=sel, cp_sel=[])
+        await state.set_state(CopartForm.damage)
+        options = sorted(((c, label) for c, (_, label) in DAMAGE_CODES.items()),
+                         key=lambda x: x[1])
+        await call.message.edit_text(
+            _cp_step(10, "Шаг 10 — Исключить повреждения",
+                     "Отмеченные типы <b>не попадут</b> в выдачу.\n\n"
+                     "<i>Горелые, утопленники и химия обычно не подлежат "
+                     "восстановлению.</i>"),
+            parse_mode="HTML",
+            reply_markup=_cp_multi_kb(
+                options, [], 2, [("🗑 Отметить пожары, потоп и химию", "cpw_preset_junk")]),
+        )
+
+    elif current == CopartForm.damage.state:
+        await state.update_data(damage_exclude=sel, cp_sel=[])
+        await state.set_state(CopartForm.yards)
+        await call.message.edit_text(
+            _cp_step(11, "Шаг 11 — Площадки",
+                     "Отметь штаты и провинции. Ничего не отмечено — вся страна.\n\n"
+                     "<i>Чем ближе площадка к порту вывоза, "
+                     "тем дешевле доставка.</i>"),
+            parse_mode="HTML",
+            reply_markup=_cp_multi_kb([(s, s) for s in YARD_STATES], [], 5),
+        )
+
+    elif current == CopartForm.yards.state:
+        await state.update_data(yards=sel)
+        await state.set_state(CopartForm.options)
+        await call.message.edit_text(
+            _cp_step(12, "Шаг 12 — Дополнительно", "Последний шаг:"),
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🚀 Только на ходу",
+                                      callback_data="cpw_opt:rnd")],
+                [InlineKeyboardButton(text="⚡️ Только «купить сразу»",
+                                      callback_data="cpw_opt:buy")],
+                [InlineKeyboardButton(text="🚀+⚡️ И то, и другое",
+                                      callback_data="cpw_opt:both")],
+                [InlineKeyboardButton(text="⏭ Без ограничений",
+                                      callback_data="cpw_opt:none")],
+            ]),
+        )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("cpw_opt:"), StateFilter(CopartForm.options))
+async def cpw_finish(call: CallbackQuery, state: FSMContext):
+    opt = call.data.split(":", 1)[1]
+    data = await state.get_data()
+    await state.clear()
+
+    f = await create_filter(
+        user_id=OWNER_ID,
+        name=data["name"],
+        kind="copart",
+        brand=data.get("brand"),
+        model=data.get("model"),
+        year_from=data.get("year_from"),
+        year_to=data.get("year_to"),
+        price_from=data.get("price_from"),
+        price_to=data.get("price_to"),
+        mileage_to=data.get("mileage_to"),
+        sources=["copart"],
+        title_groups=data.get("title_groups") or None,
+        damage_exclude=data.get("damage_exclude") or None,
+        yards=data.get("yards") or None,
+        run_and_drive=True if opt in ("rnd", "both") else None,
+        buy_now_only=True if opt in ("buy", "both") else None,
+    )
+
+    await call.message.edit_text(
+        f"✅ <b>Фильтр Copart «{f['name']}» создан!</b>\n\n"
+        f"{_render_filter(f)}\n\n"
+        f"<i>Лоты придут после ближайшего обхода.</i>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📋 К фильтрам", callback_data="filters_list:0")],
+            [InlineKeyboardButton(text="🟡 Лоты",       callback_data="copart_lots:0")],
+            [InlineKeyboardButton(text="🏠 Меню",       callback_data="main_menu")],
+        ]),
+    )
+    await call.answer("✅ Создан")
+
+
+# ── Расчёт стоимости «под ключ» ───────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("cost:"))
+async def cb_cost(call: CallbackQuery):
+    if not _is_owner(call.from_user.id):
+        await call.answer("⛔", show_alert=True)
+        return
+
+    external_id = call.data.split(":", 1)[1]
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        """SELECT title, price, buy_now_price, url FROM seen_listings
+           WHERE source = 'copart' AND external_id = $1""",
+        external_id,
+    )
+    if not row:
+        await call.answer("Лот не найден", show_alert=True)
+        return
+
+    # За базу берём цену «купить сразу», если она есть — она точная
+    base = row["buy_now_price"] or row["price"]
+    breakdown = estimate(base)
+    if not breakdown:
+        await call.answer("У лота не указана цена — считать не от чего",
+                          show_alert=True)
+        return
+
+    await call.message.answer(
+        f"<b>{row['title'] or 'Лот'}</b>\n"
+        f"<code>Лот {external_id}</code>\n\n"
+        + format_breakdown(breakdown),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="🔗 Открыть лот", url=row["url"]),
+        ]]),
+    )
+    await call.answer()
+
+
+# ── Статистика по оценкам Copart ──────────────────────────────────────────────
+
+STATS_GROUPS = [
+    ("model",       "🚗 По модели"),
+    ("year",        "📅 По году"),
+    ("damage",      "💥 По повреждению"),
+    ("title_group", "📄 По документу"),
+    ("state",       "🏁 По штату"),
+]
+
+
+def _stats_kb(active: str) -> InlineKeyboardMarkup:
+    rows, row = [], []
+    for code, label in STATS_GROUPS:
+        mark = "▶️ " if code == active else ""
+        row.append(InlineKeyboardButton(text=f"{mark}{label}",
+                                        callback_data=f"copart_stats:{code}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([
+        InlineKeyboardButton(text="🟡 Лоты", callback_data="copart_lots:0"),
+        InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@router.callback_query(F.data.startswith("copart_stats"))
+async def cb_copart_stats(call: CallbackQuery):
+    if not _is_owner(call.from_user.id):
+        await call.answer("⛔", show_alert=True)
+        return
+
+    parts = call.data.split(":")
+    group = parts[1] if len(parts) > 1 else "model"
+    label = dict(STATS_GROUPS).get(group, group)
+
+    rows = await copart_price_stats(group)
+    if not rows:
+        await call.message.edit_text(
+            "📊 <b>Оценки Copart</b>\n\n"
+            "Данных пока мало. Статистика появится, когда наберётся "
+            "хотя бы по два лота в группе.",
+            parse_mode="HTML",
+            reply_markup=_stats_kb(group),
+        )
+        await call.answer()
+        return
+
+    lines = [
+        f"📊 <b>Оценки Copart — {label.split(' ', 1)[1]}</b>",
+        "<i>оценочная стоимость лота, не цена продажи</i>",
+        f"<code>{'─' * 26}</code>",
+    ]
+    for r in rows:
+        bucket = (r["bucket"] or "—").strip() or "—"
+        lines.append(f"<b>{bucket}</b>  ·  {r['cnt']} шт.")
+        lines.append(
+            f"   {_fmt_usd(r['min_price'])} – {_fmt_usd(r['max_price'])}"
+            f"   ср. <b>{_fmt_usd(r['avg_price'])}</b>"
+        )
+        extra = []
+        if r["avg_repair"]:
+            extra.append(f"ремонт ~{_fmt_usd(r['avg_repair'])}")
+        if r["avg_mileage"]:
+            extra.append(f"{r['avg_mileage']:,}".replace(",", " ") + " миль")
+        if extra:
+            lines.append("   <i>" + "  ·  ".join(extra) + "</i>")
+
+    await call.message.edit_text(
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=_stats_kb(group),
+    )
+    await call.answer()
+
+
+# ── Поиск лота по номеру, VIN или названию ────────────────────────────────────
+
+class LotSearch(StatesGroup):
+    query = State()
+
+
+@router.callback_query(F.data == "copart_search")
+async def cb_copart_search(call: CallbackQuery, state: FSMContext):
+    if not _is_owner(call.from_user.id):
+        await call.answer("⛔", show_alert=True)
+        return
+    await state.set_state(LotSearch.query)
+    await call.message.edit_text(
+        "🔍 <b>Поиск лота</b>\n\n"
+        "Отправь <b>номер лота</b>, <b>VIN</b> или часть названия.\n\n"
+        "Примеры:\n"
+        "<code>41514795</code>\n"
+        "<code>2GNFLNEK9C6</code>\n"
+        "<code>CRUZE LT</code>\n\n"
+        "<i>VIN на Copart частично скрыт, поэтому ищем по началу.</i>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="◀️ Отмена", callback_data="copart_lots:0")
+        ]]),
+    )
+    await call.answer()
+
+
+@router.message(StateFilter(LotSearch.query))
+async def cb_lot_search_run(message: Message, state: FSMContext):
+    if not _is_owner(message.from_user.id):
+        return
+    await state.clear()
+    query = message.text.strip()
+
+    rows = await find_lots(query)
+    if not rows:
+        await message.answer(
+            f"🔍 По запросу «{query}» ничего не нашлось.\n\n"
+            "<i>Поиск идёт по уже сохранённым лотам — тем, что бот присылал "
+            "по твоим фильтрам.</i>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔍 Ещё раз", callback_data="copart_search")],
+                [InlineKeyboardButton(text="🏠 Меню",   callback_data="main_menu")],
+            ]),
+        )
+        return
+
+    parts = [f"🔍 <b>Найдено: {len(rows)}</b>\n<code>{'─' * 24}</code>"]
+    for row in rows:
+        parts.append(_render_copart_lot(row))
+        # Показываем историю перевыставлений, если машина уже была на торгах
+        vin = _opt(row, "vin")
+        if vin:
+            history = await get_relist_history(vin)
+            if len(history) > 1:
+                parts[-1] += f"\n🔁 На торгах {len(history)} раз(а): " + ", ".join(
+                    h["external_id"] for h in history
+                )
+
+    await message.answer(
+        "\n\n".join(parts),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔍 Ещё раз", callback_data="copart_search")],
+            [InlineKeyboardButton(text="🏠 Меню",   callback_data="main_menu")],
+        ]),
+    )
+
+
 # ── Copart ────────────────────────────────────────────────────────────────────
 
 COPART_PAGE_SIZE = 5
@@ -1743,7 +2395,8 @@ async def cb_copart_help(call: CallbackQuery):
             parse_mode="HTML",
             disable_web_page_preview=True,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="➕ Новый фильтр", callback_data="filter_add")],
+                [InlineKeyboardButton(text="➕🟡 Создать фильтр Copart",
+                                      callback_data="copart_add")],
                 [
                     InlineKeyboardButton(text="📋 Мои фильтры", callback_data="filters_list:0"),
                     InlineKeyboardButton(text="🟡 Лоты",       callback_data="copart_lots:0"),
@@ -1785,8 +2438,9 @@ async def cb_copart_lots(call: CallbackQuery):
             "Лоты появятся после ближайшего обхода (раз в 14 минут).",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="➕🟡 Создать фильтр Copart",
+                                      callback_data="copart_add")],
                 [InlineKeyboardButton(text="❓ Как настроить", callback_data="copart_help")],
-                [InlineKeyboardButton(text="📋 Мои фильтры", callback_data="filters_list:0")],
                 [InlineKeyboardButton(text="🏠 Меню",        callback_data="main_menu")],
             ]),
         )
@@ -1811,6 +2465,10 @@ async def cb_copart_lots(call: CallbackQuery):
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             nav,
             [
+                InlineKeyboardButton(text="🔍 Поиск лота", callback_data="copart_search"),
+                InlineKeyboardButton(text="📊 Оценки",     callback_data="copart_stats"),
+            ],
+            [
                 InlineKeyboardButton(text="❓ Как настроить", callback_data="copart_help"),
                 InlineKeyboardButton(text="🏠 Меню",          callback_data="main_menu"),
             ],
@@ -1823,37 +2481,31 @@ async def cb_copart_lots(call: CallbackQuery):
 
 @router.callback_query(F.data.startswith("fav:"))
 async def cb_fav_add(call: CallbackQuery):
-    # Парсим данные из callback — fav:source:short_id
-    # Полные данные объявления берём из текста сообщения
+    """
+    Добавить в избранное. Данные берём из seen_listings по (source, external_id) —
+    объявление туда уже записано к моменту отправки уведомления.
+    """
     parts = call.data.split(":", 2)
     if len(parts) < 3:
-        await call.answer("⭐️ Добавлено в избранное")
+        await call.answer("Не удалось определить объявление", show_alert=True)
         return
 
-    source    = parts[1]
-    short_id  = parts[2]
+    source, external_id = parts[1], parts[2]
 
-    # Пытаемся сохранить через API
     try:
-        import aiohttp as _aiohttp
-        from config import WEBHOOK_HOST as _WH
-        # Извлекаем данные из текста сообщения
-        msg_text = call.message.text or ""
-        title = msg_text.split("\n")[1] if "\n" in msg_text else "Авто"
-        async with _aiohttp.ClientSession() as s:
-            await s.post(
-                f"{_WH}/api/favorites",
-                json={
-                    "source": source,
-                    "external_id": short_id,
-                    "url": "",  # URL в тексте есть, но сложно извлечь
-                    "title": title,
-                },
-            )
-    except Exception:
-        pass
+        added = await add_favorite_from_seen(OWNER_ID, source, external_id)
+    except Exception as e:
+        logger.error(f"избранное: ошибка сохранения {source}/{external_id}: {e}")
+        await call.answer("⚠️ Не удалось сохранить", show_alert=True)
+        return
 
-    await call.answer("⭐️ Добавлено в избранное")
+    if added:
+        await call.answer("⭐️ Добавлено в избранное")
+    elif await is_favorite(OWNER_ID, source, external_id):
+        await call.answer("⭐️ Уже в избранном")
+    else:
+        # Строки в seen_listings нет — например, объявление успели вычистить
+        await call.answer("⚠️ Объявление больше не найдено", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("hide:"))

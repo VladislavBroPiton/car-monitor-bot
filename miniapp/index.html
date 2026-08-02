@@ -126,6 +126,32 @@ canvas#chart{width:100%;height:120px;display:block}
 .btn-fav.active{background:rgba(245,158,11,0.15)}
 .load-more{display:flex;align-items:center;justify-content:center;width:calc(100% - 32px);margin:12px 16px 0;padding:12px;border-radius:var(--r-sm);background:var(--bg2);border:1px solid var(--border);color:var(--text2);font-size:13px;font-weight:500;cursor:pointer}
 
+/* ── Copart: раздел живёт в собственной жёлтой теме ── */
+/* Переопределяем акцент внутри страницы — общие элементы (кнопки, вкладки,
+   «загрузить ещё») подхватывают его сами, без отдельных правил */
+#page-copart{
+  --accent:var(--copart);
+  --accent2:var(--copart2);
+  --accent-dim:var(--copart-dim);
+  background:
+    radial-gradient(120% 60% at 50% 0%, rgba(245,158,11,0.10), transparent 62%);
+}
+#page-copart .hdr{
+  background:linear-gradient(180deg, rgba(245,158,11,0.16), rgba(13,13,15,0.92));
+  border-bottom:1px solid var(--copart-border);
+}
+#page-copart .hdr h1{color:var(--copart2)}
+#page-copart .load-more{border-color:var(--copart-border);color:var(--copart2)}
+/* Жёлтая подсветка вкладки в нижней навигации */
+#nav-copart.active{color:var(--copart2)}
+#nav-copart.active svg{stroke:var(--copart2)}
+.cp-badge{display:inline-flex;align-items:center;font-size:10px;font-weight:800;
+  letter-spacing:0.6px;text-transform:uppercase;color:#1C1C1E;background:var(--copart);
+  border-radius:6px;padding:2px 7px;vertical-align:middle;margin-left:8px}
+/* Полоска над активной вкладкой аукциона */
+#nav-copart.active::before{content:'';position:absolute;top:0;left:22%;right:22%;
+  height:2px;border-radius:0 0 2px 2px;background:var(--copart)}
+
 /* ── Copart ── */
 .cp-card{background:var(--bg2);border:1px solid var(--border);border-left:3px solid var(--copart);border-radius:var(--r);margin:10px 16px 0;padding:14px;overflow:hidden}
 .cp-photo{position:relative;margin:-14px -14px 12px -14px;background:var(--bg3);aspect-ratio:4/3;overflow:hidden}
@@ -141,6 +167,14 @@ canvas#chart{width:100%;height:120px;display:block}
 .cp-buynow{font-size:12px;font-weight:700;color:var(--copart2)}
 .cp-repair{font-size:12px;color:var(--text2);margin-top:2px}
 .cp-vin{font-size:11px;color:var(--text3);margin-top:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.cp-cost{margin-top:10px}
+.cp-cost:not(:empty){padding:10px 12px;border-radius:var(--r-sm);background:var(--bg3);border:1px solid var(--copart-border)}
+.cp-cost-row{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:var(--text2);padding:2px 0}
+.cp-cost-row b{color:var(--text);font-weight:600}
+.cp-cost-row.total{margin-top:6px;padding-top:8px;border-top:1px solid var(--border);font-size:13px}
+.cp-cost-row.total b{color:var(--copart2);font-weight:800}
+.cp-cost-note{font-size:11px;color:var(--text3);margin-top:8px;line-height:1.45}
+.cp-relist{display:inline-block;font-size:11px;font-weight:700;color:#1C1C1E;background:var(--copart);border-radius:8px;padding:2px 7px;margin-top:6px}
 .cp-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
 .cp-lot{font-size:11px;font-weight:700;color:var(--copart2);letter-spacing:0.3px}
 .cp-auction{font-size:11px;font-weight:600;color:var(--copart);background:var(--copart-dim);border:1px solid var(--copart-border);border-radius:10px;padding:3px 8px;white-space:nowrap}
@@ -343,10 +377,14 @@ body.light-force{--bg:#F5F5F7;--bg2:#FFFFFF;--bg3:#F0F0F3;--bg4:#E8E8ED;--border
 
 <!-- COPART -->
 <div class="page" id="page-copart">
-  <div class="hdr"><h1>🟡 Copart</h1><div class="hdr-sub" id="cp-sub">Загрузка...</div></div>
+  <div class="hdr">
+    <h1>🟡 Copart<span class="cp-badge">аукцион</span></h1>
+    <div class="hdr-sub" id="cp-sub">Загрузка...</div>
+  </div>
   <div class="cp-note">
-    Аукцион битых авто из США и Канады. Цены — <b>оценочная стоимость</b> в валюте
-    торгов, пробег — в милях. Ставки на самом Copart доступны только после регистрации.
+    Битые и залоговые авто из США и Канады. Цены — <b>в долларах</b>
+    (оценочная стоимость либо «купить сразу»), пробег — <b>в милях</b>.
+    Текущие ставки Copart показывает только зарегистрированным.
   </div>
   <div style="padding:12px 16px 0">
     <input type="search" id="cp-search" placeholder="🔍 Марка, модель, номер лота..."
@@ -1162,54 +1200,73 @@ function copartCard(l) {
         ${l.city ? `<div class="cp-row">🏁 <b>${esc(l.city)}</b></div>` : ''}
       </div>
       ${l.vin ? `<div class="cp-vin">VIN ${esc(l.vin)}</div>` : ''}
+      <div class="cp-cost" id="cost-${esc(l.external_id)}"></div>
       <div class="cp-footer">
         <a class="cp-open" href="${esc(l.url)}" target="_blank">🔗 Открыть лот</a>
+        <button class="btn-fav" onclick="showCost('${esc(l.external_id)}')"
+                title="Сколько выйдет под ключ">🧮</button>
         <button class="btn-fav" onclick="shareListing('${esc(l.url)}','${esc(l.title||'')}')" title="Поделиться">↗</button>
       </div>
     </div>`;
 }
 
-// Быстрые фильтры — работают по уже загруженным лотам, без запроса к серверу
+// Прикидка стоимости «под ключ» — считается на сервере по тарифам из настроек
+async function showCost(extId) {
+  const box = document.getElementById(`cost-${extId}`);
+  if(!box) return;
+  if(box.innerHTML) { box.innerHTML = ''; return; }   // повторный тап — свернуть
+  box.innerHTML = '<div class="cp-cost-row">Считаю...</div>';
+  try {
+    const r = await fetch(`${BASE}/api/copart/cost/${encodeURIComponent(extId)}`);
+    const d = await r.json();
+    if(!d.ok) {
+      box.innerHTML = '<div class="cp-cost-row">У лота не указана цена</div>';
+      return;
+    }
+    const row = (k, v) => `<div class="cp-cost-row"><span>${k}</span><b>${cpPrice(v)}</b></div>`;
+    box.innerHTML =
+      row('Лот', d.lot_price) +
+      row('Сбор аукциона', d.auction_fee) +
+      row('Брокер', d.broker_fee) +
+      row('До порта США', d.inland) +
+      row('Морской фрахт', d.ocean) +
+      row('Пошлина и сборы', d.customs) +
+      `<div class="cp-cost-row total"><span>Итого</span>
+         <b>${cpPrice(d.total_usd)} ≈ ${d.total_rub.toLocaleString('ru-RU')} ₽</b></div>
+       <div class="cp-cost-note">Оценка по тарифам из настроек.
+         Цена лота оценочная — итог торгов может отличаться.</div>`;
+  } catch {
+    box.innerHTML = '<div class="cp-cost-row">Ошибка расчёта</div>';
+  }
+}
+
+// Быстрые фильтры считаются на сервере: иначе «на ходу» отбирал бы
+// только среди загруженной страницы, а не по всей базе
 let cpFlags = {clean:false, rnd:false, buynow:false, keys:false};
 
 function toggleCpFlag(name, btn) {
   cpFlags[name] = !cpFlags[name];
   btn.classList.toggle('active', cpFlags[name]);
-  renderCopart();
-}
-
-function cpPassesFlags(l) {
-  if(cpFlags.clean && String(l.title_group||'').toUpperCase() !== 'CLEAN TITLE') return false;
-  if(cpFlags.rnd    && !l.run_and_drive) return false;
-  if(cpFlags.buynow && !l.buy_now_price) return false;
-  if(cpFlags.keys   && String(l.has_keys||'').toUpperCase() === 'NO') return false;
-  return true;
+  cpPage = 1;
+  loadCopart(true);
 }
 
 function renderCopart() {
   const list = document.getElementById('cp-list');
-  let items = allCopart.filter(cpPassesFlags);
-  if(cpSearch) {
-    items = items.filter(l =>
-      (l.title||'').toLowerCase().includes(cpSearch) ||
-      (l.city||'').toLowerCase().includes(cpSearch) ||
-      (l.external_id||'').includes(cpSearch)
-    );
-  }
+  const items = allCopart;
   if(!items.length) {
     // Пусто из-за фильтров — это другая ситуация, чем «лотов вообще нет»
-    const filtered = allCopart.length > 0;
-    list.innerHTML = filtered
+    const filtering = cpSearch || Object.values(cpFlags).some(Boolean);
+    list.innerHTML = filtering
       ? `<div class="empty">
            <div class="empty-icon">🔍</div>
            <div class="empty-title">Ничего не подошло</div>
-           <div class="empty-text">Загружено лотов: ${allCopart.length}.
-             Сними часть фильтров или очисти поиск.</div>
+           <div class="empty-text">Сними часть фильтров или очисти поиск.</div>
          </div>`
       : `<div class="empty">
            <div class="empty-icon">🟡</div>
            <div class="empty-title">Лотов пока нет</div>
-           <div class="empty-text">Добавь источник <b>Copart</b> в фильтр —
+           <div class="empty-text">Создай фильтр Copart в боте —
              лоты появятся после ближайшего обхода.</div>
          </div>`;
     return;
@@ -1217,9 +1274,12 @@ function renderCopart() {
   list.innerHTML = items.map(copartCard).join('');
 }
 
+let cpSearchTimer = null;
 function searchCopart(q) {
-  cpSearch = q.toLowerCase().trim();
-  renderCopart();
+  cpSearch = q.trim();
+  // Запрос уходит на сервер — не дёргаем его на каждую букву
+  clearTimeout(cpSearchTimer);
+  cpSearchTimer = setTimeout(() => { cpPage = 1; loadCopart(true); }, 350);
 }
 
 function sortCopart(mode, btn) {
@@ -1234,10 +1294,14 @@ async function loadCopart(reset=false) {
   const list = document.getElementById('cp-list');
   if(reset){ list.innerHTML = skelCards(3); cpPage = 1; allCopart = []; }
   try {
-    const r = await fetch(`${BASE}/api/copart/listings?page=${cpPage}&limit=20&sort=${cpSort}`);
+    const p = new URLSearchParams({page:cpPage, limit:20, sort:cpSort});
+    if(cpSearch) p.set('q', cpSearch);
+    for(const [k,v] of Object.entries(cpFlags)) if(v) p.set(k, 'true');
+    const r = await fetch(`${BASE}/api/copart/listings?${p}`);
     const d = await r.json();
+    const anyFilter = cpSearch || Object.values(cpFlags).some(Boolean);
     document.getElementById('cp-sub').textContent =
-      d.total ? `${d.total} лотов` : 'нет лотов';
+      d.total ? `${d.total} лотов${anyFilter ? ' по фильтру' : ''}` : 'нет лотов';
     allCopart = reset ? d.items : [...allCopart, ...d.items];
     cpHasMore = cpPage < d.pages;
     document.getElementById('cp-more').style.display = cpHasMore ? 'flex' : 'none';

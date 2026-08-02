@@ -2,6 +2,9 @@ CREATE TABLE IF NOT EXISTS filters (
     id           SERIAL PRIMARY KEY,
     user_id      BIGINT NOT NULL,
     name         TEXT NOT NULL,
+    -- 'ru' — российские площадки, 'copart' — аукцион (своя семантика полей:
+    -- цена в долларах, пробег в милях, города не применяются)
+    kind         TEXT DEFAULT 'ru',
     brand        TEXT,
     model        TEXT,
     year_from    INTEGER,
@@ -122,6 +125,7 @@ ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS vin             TEXT;
 ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS specs           TEXT;
 ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS auction_notify_stage SMALLINT DEFAULT 0;
 
+ALTER TABLE filters ADD COLUMN IF NOT EXISTS kind           TEXT DEFAULT 'ru';
 ALTER TABLE filters ADD COLUMN IF NOT EXISTS title_groups   TEXT[];
 ALTER TABLE filters ADD COLUMN IF NOT EXISTS damage_exclude TEXT[];
 ALTER TABLE filters ADD COLUMN IF NOT EXISTS yards          TEXT[];

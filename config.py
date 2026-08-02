@@ -16,6 +16,14 @@ SCRAPER_API_KEY: str = os.getenv("SCRAPER_API_KEY", "")
 # Курс доллара для Copart: лоты в USD, а границы цены в фильтрах — в рублях
 USD_RUB_RATE: float = float(os.getenv("USD_RUB_RATE", "90"))
 
+# ── Расчёт итоговой стоимости лота Copart ─────────────────────────────────────
+# Значения по умолчанию ориентировочные — реальные тарифы задаются через env.
+COPART_AUCTION_FEE_PCT: float = float(os.getenv("COPART_AUCTION_FEE_PCT", "10"))
+COPART_BROKER_FEE:      float = float(os.getenv("COPART_BROKER_FEE", "700"))
+COPART_INLAND_USD:      float = float(os.getenv("COPART_INLAND_USD", "600"))
+COPART_OCEAN_USD:       float = float(os.getenv("COPART_OCEAN_USD", "1600"))
+COPART_CUSTOMS_PCT:     float = float(os.getenv("COPART_CUSTOMS_PCT", "48"))
+
 WEBHOOK_HOST: str = os.environ["WEBHOOK_HOST"]
 WEBHOOK_PATH: str = "/webhook"
 WEBHOOK_SECRET: str = os.getenv("WEBHOOK_SECRET", "supersecret")

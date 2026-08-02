@@ -50,6 +50,9 @@ class SearchFilter:
     transmission: Optional[str] = None
     body_type: Optional[str] = None
     sources: list[str] = field(default_factory=lambda: ["autoru", "drom"])
+    # 'ru' — российские площадки; 'copart' — отдельный фильтр аукциона,
+    # у которого цена задаётся в долларах, а пробег в милях
+    kind: str = "ru"
     # ── Поля, которые использует только источник copart ───────────────────────
     auction_date_from: Optional[datetime.date] = None
     auction_date_to: Optional[datetime.date] = None
@@ -85,6 +88,7 @@ class SearchFilter:
             transmission=record["transmission"],
             body_type=record["body_type"],
             sources=list(record["sources"] or ["autoru", "drom"]),
+            kind=opt("kind") or "ru",
             auction_date_from=opt("auction_date_from"),
             auction_date_to=opt("auction_date_to"),
             title_groups=list(opt("title_groups") or []),

@@ -15,6 +15,7 @@ from db.repository import (
     get_notification_settings,
     get_lots_to_remind,
     set_notify_stage,
+    count_relists,
 )
 
 logger = logging.getLogger(__name__)
@@ -98,7 +99,7 @@ def _fmt_body(value: Optional[str]) -> str:
     return BODY_RU.get(value.upper(), value)
 
 
-def _build_message(listing: Listing) -> str:
+def _build_message(listing: Listing, relists: int = 0) -> str:
     badge     = SOURCE_BADGE.get(listing.source, listing.source)
     is_copart = listing.source == "copart"
     price     = (_fmt_amount(listing.price, listing.currency) if is_copart
@@ -182,6 +183,13 @@ def _build_message(listing: Listing) -> str:
     if is_copart and listing.vin:
         lines.append(f"<code>VIN {listing.vin}</code>")
 
+    # Машина уже была на торгах под другим номером — значит, не ушла.
+    # Либо цена завышена, либо есть проблема, которой не видно в описании.
+    if relists:
+        times = "раз" if relists == 1 else "раза" if relists < 5 else "раз"
+        lines.append(f"🔁 <b>Выставляется повторно</b> — уже был на торгах "
+                     f"{relists} {times}")
+
     # Фильтр
     if listing.filter_name:
         lines.append(f"\n<i>🔍 Фильтр: {listing.filter_name}</i>")
@@ -191,8 +199,10 @@ def _build_message(listing: Listing) -> str:
 
 def _build_keyboard(listing: Listing) -> InlineKeyboardMarkup:
     """Кнопки прямо под объявлением."""
-    # callback_data ограничен 64 байтами — берём только первые 20 символов external_id
-    short_id = listing.external_id[:20]
+    # callback_data ограничен 64 байтами. По id ищем объявление в seen_listings,
+    # поэтому режем по максимуму, а не «на глазок»: "hide:" + источник + ":" ≈ 12
+    limit = 64 - len("hide:") - len(listing.source) - 1
+    short_id = listing.external_id[:limit]
     open_text = "🔗 Открыть лот" if listing.source == "copart" else "🔗 Открыть объявление"
     return InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -211,14 +221,20 @@ def _build_keyboard(listing: Listing) -> InlineKeyboardMarkup:
                 callback_data=f"hide:{listing.source}:{short_id}",
             ),
         ],
-    ])
+    ] + ([
+        [InlineKeyboardButton(
+            text="🧮 Сколько выйдет «под ключ»",
+            callback_data=f"cost:{short_id}",
+        )],
+    ] if listing.source == "copart" else []))
 
 
 CAPTION_LIMIT = 1024   # ограничение Telegram на подпись к фото
 
 
-async def send_listing(bot: Bot, listing: Listing, chat_id: int = OWNER_ID):
-    text = _build_message(listing)
+async def send_listing(bot: Bot, listing: Listing, chat_id: int = OWNER_ID,
+                       relists: int = 0):
+    text = _build_message(listing, relists=relists)
     kb   = _build_keyboard(listing)
 
     # Лот с фотографией отправляем картинкой — по битой машине фото решает всё.
@@ -290,7 +306,15 @@ async def process_listings(
         if quiet:
             continue
 
-        await send_listing(bot, listing, chat_id=chat_id)
+        # Считаем после mark_seen — текущая запись исключается по external_id
+        relists = 0
+        if listing.source == "copart" and listing.vin:
+            try:
+                relists = await count_relists(listing.vin, listing.external_id)
+            except Exception as e:
+                logger.warning(f"не удалось посчитать повторы по VIN: {e}")
+
+        await send_listing(bot, listing, chat_id=chat_id, relists=relists)
         await asyncio.sleep(SEND_DELAY)
 
     return new_count

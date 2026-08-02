@@ -33,6 +33,8 @@ _MIGRATIONS = (
     "ALTER TABLE favorites     ADD COLUMN IF NOT EXISTS currency TEXT",
     "ALTER TABLE favorites     ADD COLUMN IF NOT EXISTS image_url TEXT",
     # Расширенные фильтры Copart
+    "ALTER TABLE filters ADD COLUMN IF NOT EXISTS kind TEXT DEFAULT 'ru'",
+    "UPDATE filters SET kind = 'ru' WHERE kind IS NULL",
     "ALTER TABLE filters ADD COLUMN IF NOT EXISTS title_groups TEXT[]",
     "ALTER TABLE filters ADD COLUMN IF NOT EXISTS damage_exclude TEXT[]",
     "ALTER TABLE filters ADD COLUMN IF NOT EXISTS yards TEXT[]",
@@ -40,6 +42,8 @@ _MIGRATIONS = (
     "ALTER TABLE filters ADD COLUMN IF NOT EXISTS buy_now_only BOOLEAN",
     "CREATE INDEX IF NOT EXISTS idx_seen_listings_auction_notify "
     "ON seen_listings (source, auction_date, auction_notify_stage)",
+    # Поиск повторных выставлений по VIN и поиск лота вручную
+    "CREATE INDEX IF NOT EXISTS idx_seen_listings_vin ON seen_listings (vin)",
 )
 
 
@@ -106,24 +110,33 @@ async def create_filter(
     sources: list[str] = None,
     auction_date_from: Optional[datetime.date] = None,
     auction_date_to: Optional[datetime.date] = None,
+    kind: str = "ru",
+    title_groups: Optional[list[str]] = None,
+    damage_exclude: Optional[list[str]] = None,
+    yards: Optional[list[str]] = None,
+    run_and_drive: Optional[bool] = None,
+    buy_now_only: Optional[bool] = None,
 ) -> asyncpg.Record:
     if sources is None:
-        sources = ["autoru", "drom", "avito"]
+        sources = ["copart"] if kind == "copart" else ["autoru", "drom", "avito"]
     pool = await get_pool()
     return await pool.fetchrow(
         """
         INSERT INTO filters
-            (user_id, name, brand, model, year_from, year_to,
+            (user_id, name, kind, brand, model, year_from, year_to,
              price_from, price_to, mileage_from, mileage_to,
              cities, transmission, body_type, sources,
-             auction_date_from, auction_date_to)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+             auction_date_from, auction_date_to,
+             title_groups, damage_exclude, yards, run_and_drive, buy_now_only)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
+                $18,$19,$20,$21,$22)
         RETURNING *
         """,
-        user_id, name, brand, model, year_from, year_to,
+        user_id, name, kind, brand, model, year_from, year_to,
         price_from, price_to, mileage_from, mileage_to,
         cities, transmission, body_type, sources,
         auction_date_from, auction_date_to,
+        title_groups, damage_exclude, yards, run_and_drive, buy_now_only,
     )
 
 
@@ -222,6 +235,94 @@ async def mark_seen(listing) -> bool:
     return result == "INSERT 0 1"
 
 
+async def find_lots(query: str, limit: int = 10) -> list[asyncpg.Record]:
+    """
+    Поиск сохранённых лотов Copart по номеру лота, VIN или названию.
+    VIN у Copart частично замаскирован (2GNFLNEK9C6******), поэтому
+    сравниваем по началу строки.
+    """
+    q = query.strip().upper()
+    if not q:
+        return []
+    pool = await get_pool()
+    return await pool.fetch(
+        """
+        SELECT * FROM seen_listings
+        WHERE source = 'copart'
+          AND (external_id = $1 OR vin LIKE $2 OR UPPER(title) LIKE $3)
+        ORDER BY created_at DESC
+        LIMIT $4
+        """,
+        q, q + "%", "%" + q + "%", limit,
+    )
+
+
+async def count_relists(vin: Optional[str], external_id: str) -> int:
+    """
+    Сколько раз этот же автомобиль уже был на торгах.
+    Copart перевыставляет непроданные лоты под новым номером, но VIN тот же —
+    по нему и считаем. Возвращает число прошлых появлений (0 — впервые).
+    """
+    if not vin or "*" not in vin and len(vin) < 6:
+        return 0
+    pool = await get_pool()
+    return await pool.fetchval(
+        """SELECT COUNT(*) FROM seen_listings
+           WHERE source = 'copart' AND vin = $1 AND external_id <> $2""",
+        vin, external_id,
+    ) or 0
+
+
+async def copart_price_stats(group_by: str = "model", limit: int = 15) -> list[asyncpg.Record]:
+    """
+    Разброс оценочных стоимостей по накопленным лотам.
+    Цену продажи Copart не отдаёт, поэтому считаем по оценкам (`la`):
+    сколько таких машин видели и в какую вилку они укладываются.
+    """
+    expr = {
+        # Марка и модель из заголовка вида «2016 CHEVROLET CRUZE LT»
+        "model":  "SPLIT_PART(title, ' ', 2) || ' ' || SPLIT_PART(title, ' ', 3)",
+        "year":   "year::TEXT",
+        "damage": "COALESCE(damage_description, 'НЕ УКАЗАНО')",
+        "title_group": "COALESCE(title_group, 'НЕ УКАЗАН')",
+        "state":  "SPLIT_PART(city, ' - ', 1)",
+    }.get(group_by)
+    if not expr:
+        return []
+
+    pool = await get_pool()
+    return await pool.fetch(
+        f"""
+        SELECT {expr} AS bucket,
+               COUNT(*)                      AS cnt,
+               MIN(price)                    AS min_price,
+               ROUND(AVG(price))::INT        AS avg_price,
+               MAX(price)                    AS max_price,
+               ROUND(AVG(repair_cost))::INT  AS avg_repair,
+               ROUND(AVG(mileage))::INT      AS avg_mileage
+        FROM seen_listings
+        WHERE source = 'copart' AND price IS NOT NULL AND price > 0
+        GROUP BY bucket
+        HAVING COUNT(*) >= 2
+        ORDER BY cnt DESC
+        LIMIT $1
+        """,
+        limit,
+    )
+
+
+async def get_relist_history(vin: str) -> list[asyncpg.Record]:
+    """Все появления автомобиля на торгах — от старых к новым."""
+    pool = await get_pool()
+    return await pool.fetch(
+        """SELECT external_id, url, price, auction_date, created_at, city
+           FROM seen_listings
+           WHERE source = 'copart' AND vin = $1
+           ORDER BY created_at""",
+        vin,
+    )
+
+
 async def get_lots_to_remind(stage: int, within_hours: int) -> list[asyncpg.Record]:
     """
     Лоты Copart, у которых торги начнутся в ближайшие within_hours
@@ -256,6 +357,44 @@ async def cleanup_old_listings(days: int = 30):
     return await pool.execute(
         f"DELETE FROM seen_listings WHERE created_at < NOW() - INTERVAL '{days} days'"
     )
+
+
+# ── Favorites ─────────────────────────────────────────────────────────────────
+
+# Колонки, которые переносим из seen_listings в favorites
+FAV_COPY_COLUMNS = (
+    "source", "external_id", "url", "title", "price", "year", "mileage",
+    "city", "transmission", "damage_description", "auction_date",
+    "currency", "image_url",
+)
+
+
+async def add_favorite_from_seen(user_id: int, source: str, external_id: str) -> bool:
+    """
+    Скопировать объявление в избранное прямо из seen_listings.
+    Раньше данные вытаскивались из текста сообщения — у карточек с фото
+    текста нет вовсе, поэтому в избранное попадал мусор без ссылки.
+    """
+    pool = await get_pool()
+    cols = ", ".join(FAV_COPY_COLUMNS)
+    result = await pool.execute(
+        f"""
+        INSERT INTO favorites (user_id, {cols})
+        SELECT $1, {cols} FROM seen_listings
+        WHERE source = $2 AND external_id = $3
+        ON CONFLICT (user_id, source, external_id) DO NOTHING
+        """,
+        user_id, source, external_id,
+    )
+    return result == "INSERT 0 1"
+
+
+async def is_favorite(user_id: int, source: str, external_id: str) -> bool:
+    pool = await get_pool()
+    return bool(await pool.fetchval(
+        "SELECT 1 FROM favorites WHERE user_id=$1 AND source=$2 AND external_id=$3",
+        user_id, source, external_id,
+    ))
 
 
 # ── Price history ─────────────────────────────────────────────────────────────

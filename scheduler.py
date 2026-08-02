@@ -34,13 +34,19 @@ async def run_parsers(bot: Bot) -> dict:
 
     for f in filters:
         try:
-            logger.info(f"scheduler: фильтр «{f.name}» sources={f.sources}")
-            parsers = [
-                ("autoru", autoru_parser),
-                ("drom",   drom_parser),
-                ("avito",  avito_parser),
-                ("copart", copart_parser),
-            ]
+            # Отдельный фильтр Copart не трогает российские площадки:
+            # у него своя семантика полей (доллары, мили, без городов)
+            if f.kind == "copart":
+                logger.info(f"scheduler: 🟡 фильтр Copart «{f.name}»")
+                parsers = [("copart", copart_parser)]
+            else:
+                logger.info(f"scheduler: фильтр «{f.name}» sources={f.sources}")
+                parsers = [
+                    ("autoru", autoru_parser),
+                    ("drom",   drom_parser),
+                    ("avito",  avito_parser),
+                    ("copart", copart_parser),
+                ]
             results = await asyncio.gather(
                 *(p.search(f) for _, p in parsers),
                 return_exceptions=True,
