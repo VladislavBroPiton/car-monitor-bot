@@ -141,10 +141,12 @@ async def register_user(user_id: int, username: Optional[str] = None,
     Возвращает (доступ_разрешён, это_новый_пользователь).
     """
     pool = await get_pool()
+    # Типы параметров указаны явно: $1 попадает и в bigint-колонку,
+    # и в сравнение — без приведения Postgres не может вывести тип
     row = await pool.fetchrow(
         """
         INSERT INTO users (user_id, username, first_name, is_admin)
-        VALUES ($1, $2, $3, $1 = $4)
+        VALUES ($1::BIGINT, $2::TEXT, $3::TEXT, $1::BIGINT = $4::BIGINT)
         ON CONFLICT (user_id) DO UPDATE SET
             username     = COALESCE(EXCLUDED.username, users.username),
             first_name   = COALESCE(EXCLUDED.first_name, users.first_name),
@@ -578,14 +580,14 @@ async def record_source_result(source: str, found: int) -> int:
     row = await pool.fetchrow(
         """
         INSERT INTO source_health (source, zero_runs, last_ok, alerted)
-        VALUES ($1, CASE WHEN $2 > 0 THEN 0 ELSE 1 END,
-                    CASE WHEN $2 > 0 THEN NOW() ELSE NULL END, FALSE)
+        VALUES ($1::TEXT, CASE WHEN $2::INT > 0 THEN 0 ELSE 1 END,
+                          CASE WHEN $2::INT > 0 THEN NOW() ELSE NULL END, FALSE)
         ON CONFLICT (source) DO UPDATE SET
-            zero_runs = CASE WHEN $2 > 0 THEN 0
+            zero_runs = CASE WHEN $2::INT > 0 THEN 0
                              ELSE source_health.zero_runs + 1 END,
-            last_ok   = CASE WHEN $2 > 0 THEN NOW()
+            last_ok   = CASE WHEN $2::INT > 0 THEN NOW()
                              ELSE source_health.last_ok END,
-            alerted   = CASE WHEN $2 > 0 THEN FALSE
+            alerted   = CASE WHEN $2::INT > 0 THEN FALSE
                              ELSE source_health.alerted END
         RETURNING zero_runs
         """,

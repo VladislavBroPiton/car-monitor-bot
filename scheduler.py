@@ -187,6 +187,102 @@ def create_scheduler_router(bot: Bot) -> APIRouter:
         result = await run_parsers(bot)
         return result
 
+    @router.get("/debug/dbcheck")
+    async def debug_dbcheck():
+        """
+        Прогнать все запросы к БД по разу и показать, какие падают.
+
+        Локально настоящего Postgres нет, поэтому ошибки вроде несводимых
+        типов параметров вылезают только на проде. Этот эндпоинт находит
+        их все за один заход, а не по одной на деплой.
+
+        Пишущие запросы выполняются от лица служебного пользователя
+        с отрицательным id и убираются за собой.
+        """
+        import datetime
+        from db import repository as r
+
+        PROBE = -1        # служебный id, с настоящими не пересекается
+        results: dict[str, str] = {}
+
+        async def check(name, coro):
+            try:
+                await coro
+                results[name] = "ok"
+            except Exception as e:
+                results[name] = f"{type(e).__name__}: {e}"
+
+        # Чтение
+        await check("get_all_active_filters", r.get_all_active_filters())
+        await check("get_active_filters", r.get_active_filters(PROBE))
+        await check("get_users", r.get_users())
+        await check("get_admin_ids", r.get_admin_ids())
+        await check("is_user_allowed", r.is_user_allowed(PROBE))
+        await check("get_notification_settings", r.get_notification_settings(PROBE))
+        await check("find_lots", r.find_lots(PROBE, "TEST"))
+        await check("get_user_lots", r.get_user_lots(PROBE, 5, 0))
+        await check("count_relists", r.count_relists("TESTVIN", "0"))
+        await check("get_relist_history", r.get_relist_history("TESTVIN"))
+        await check("get_price_history", r.get_price_history("copart", "0"))
+        await check("get_lots_to_remind", r.get_lots_to_remind(1, 24))
+        for group in ("model", "year", "damage", "title_group", "state"):
+            await check(f"copart_price_stats:{group}",
+                        r.copart_price_stats(PROBE, group))
+
+        # Запись — от служебного пользователя
+        await check("register_user", r.register_user(PROBE, "probe", "Проверка"))
+        await check("set_user_active", r.set_user_active(PROBE, True))
+        await check("save_notification_settings",
+                    r.save_notification_settings(PROBE, {}))
+        await check("record_source_result", r.record_source_result("__probe__", 1))
+        await check("should_alert", r.should_alert("__probe__", 99))
+        await check("set_notify_stage", r.set_notify_stage(PROBE, "0", 0))
+        await check("add_favorite_from_seen",
+                    r.add_favorite_from_seen(PROBE, "copart", "0"))
+        await check("is_favorite", r.is_favorite(PROBE, "copart", "0"))
+        await check("cleanup_old_listings", r.cleanup_old_listings(days=3650))
+
+        # Полный цикл фильтра: создать → скопировать → изменить → выключить
+        try:
+            f = await r.create_filter(user_id=PROBE, name="проверка", kind="copart",
+                                      brands=["TOYOTA"], models=["CAMRY"])
+            results["create_filter"] = "ok"
+        except Exception as e:
+            results["create_filter"] = f"{type(e).__name__}: {e}"
+            f = None
+
+        if f:
+            await check("duplicate_filter", r.duplicate_filter(f["id"], PROBE))
+            await check("update_filter_field",
+                        r.update_filter_field(f["id"], PROBE, "name", "проверка2"))
+            await check("get_filter_by_id", r.get_filter_by_id(f["id"], PROBE))
+            await check("toggle_filter", r.toggle_filter(f["id"], PROBE, False))
+            await check("delete_filter", r.delete_filter(f["id"], PROBE))
+
+        # Уборка за собой
+        pool = await r.get_pool()
+        for sql in ("DELETE FROM filters WHERE user_id = $1",
+                    "DELETE FROM favorites WHERE user_id = $1",
+                    "DELETE FROM user_seen WHERE user_id = $1",
+                    "DELETE FROM notification_settings WHERE user_id = $1",
+                    "DELETE FROM users WHERE user_id = $1"):
+            try:
+                await pool.execute(sql, PROBE)
+            except Exception as e:
+                results["cleanup"] = f"{type(e).__name__}: {e}"
+        try:
+            await pool.execute("DELETE FROM source_health WHERE source = '__probe__'")
+        except Exception:
+            pass
+
+        broken = {k: v for k, v in results.items() if v != "ok"}
+        return {
+            "проверено": len(results),
+            "сломано": len(broken),
+            "ошибки": broken or "нет",
+            "время": str(datetime.datetime.now(datetime.timezone.utc)),
+        }
+
     @router.get("/debug/copart")
     async def debug_copart():
         """
