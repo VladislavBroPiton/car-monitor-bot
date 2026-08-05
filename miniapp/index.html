@@ -290,7 +290,7 @@ body.light-force{--bg:#F5F5F7;--bg2:#FFFFFF;--bg3:#F0F0F3;--bg4:#E8E8ED;--border
 <div id="app">
 
 <!-- DASHBOARD -->
-<div class="page active" id="page-dashboard">
+<div class="page" id="page-dashboard">
   <div class="hdr">
     <h1>🚗 Car Monitor</h1>
     <div class="hdr-sub" id="dash-sub">Загрузка...</div>
@@ -349,7 +349,7 @@ body.light-force{--bg:#F5F5F7;--bg2:#FFFFFF;--bg3:#F0F0F3;--bg4:#E8E8ED;--border
 
 <!-- LISTINGS -->
 <div class="page" id="page-listings">
-  <div class="hdr"><h1>📋 Объявления</h1><div class="hdr-sub" id="lst-sub">Загрузка...</div></div>
+  <div class="hdr"><h1>📋 Прочие площадки</h1><div class="hdr-sub" id="lst-sub">Загрузка...</div></div>
   <div style="padding:12px 16px 0">
     <input type="search" id="lst-search" placeholder="🔍 Поиск по объявлениям..."
       oninput="searchListings(this.value)"
@@ -357,10 +357,14 @@ body.light-force{--bg:#F5F5F7;--bg2:#FFFFFF;--bg3:#F0F0F3;--bg4:#E8E8ED;--border
   </div>
   <div class="src-tabs">
     <button class="src-tab active" onclick="setSource('',this)">Все</button>
+    <button class="src-tab" onclick="setSource('copart',this)">🟡 Copart</button>
+    <button class="src-tab" id="ru-toggle" onclick="toggleRuTabs(this)">🇷🇺 Другие ▾</button>
+  </div>
+  <!-- Российские площадки временно свёрнуты — раскрываются кнопкой выше -->
+  <div class="src-tabs" id="ru-tabs" style="display:none">
     <button class="src-tab" onclick="setSource('autoru',this)">🔵 Auto.ru</button>
     <button class="src-tab" onclick="setSource('avito',this)">🟢 Авито</button>
     <button class="src-tab" onclick="setSource('drom',this)">🟠 Дром</button>
-    <button class="src-tab" onclick="setSource('copart',this)">🟡 Copart</button>
   </div>
   <div style="display:flex;gap:8px;padding:8px 16px 0;flex-wrap:wrap">
     <select id="lst-sort" onchange="sortListings()" style="flex:1;padding:7px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg2);color:var(--text);font-size:13px;outline:none">
@@ -376,7 +380,7 @@ body.light-force{--bg:#F5F5F7;--bg2:#FFFFFF;--bg3:#F0F0F3;--bg4:#E8E8ED;--border
 </div>
 
 <!-- COPART -->
-<div class="page" id="page-copart">
+<div class="page active" id="page-copart">
   <div class="hdr">
     <h1>🟡 Copart<span class="cp-badge">аукцион</span></h1>
     <div class="hdr-sub" id="cp-sub">Загрузка...</div>
@@ -428,31 +432,43 @@ body.light-force{--bg:#F5F5F7;--bg2:#FFFFFF;--bg3:#F0F0F3;--bg4:#E8E8ED;--border
     <div class="card-title">Источники данных</div>
     <div class="setting-row">
       <div class="setting-left">
-        <div class="setting-icon" style="background:rgba(59,130,246,0.15)">🔵</div>
-        <div><div class="setting-label">Auto.ru</div><div class="setting-sub">Прямой API · Cookies</div></div>
-      </div>
-      <span class="status-badge status-ok">Активен</span>
-    </div>
-    <div class="setting-row">
-      <div class="setting-left">
-        <div class="setting-icon" style="background:rgba(34,197,94,0.15)">🟢</div>
-        <div><div class="setting-label">Авито</div><div class="setting-sub">ScraperAPI · 1000 req/мес</div></div>
-      </div>
-      <span class="status-badge status-ok">Активен</span>
-    </div>
-    <div class="setting-row">
-      <div class="setting-left">
-        <div class="setting-icon" style="background:rgba(107,114,128,0.15)">🟠</div>
-        <div><div class="setting-label">Дром</div><div class="setting-sub">Требует RU прокси</div></div>
-      </div>
-      <span class="status-badge status-warn">Отложен</span>
-    </div>
-    <div class="setting-row">
-      <div class="setting-left">
         <div class="setting-icon" style="background:var(--copart-dim)">🟡</div>
-        <div><div class="setting-label">Copart</div><div class="setting-sub">Публичный JSON API · без прокси</div></div>
+        <div><div class="setting-label">Copart <span class="cp-badge">основной</span></div>
+             <div class="setting-sub">Публичный JSON API · без прокси</div></div>
       </div>
       <span class="status-badge status-ok">Активен</span>
+    </div>
+    <!-- Российские площадки свёрнуты: сейчас работает в основном Copart -->
+    <div class="setting-row" onclick="toggleRuSources()" style="cursor:pointer">
+      <div class="setting-left">
+        <div class="setting-icon" style="background:rgba(107,114,128,0.15)">🇷🇺</div>
+        <div><div class="setting-label">Другие площадки</div>
+             <div class="setting-sub">Auto.ru · Авито · Дром</div></div>
+      </div>
+      <span class="status-badge status-warn" id="ru-src-chevron">▾</span>
+    </div>
+    <div id="ru-sources" style="display:none">
+      <div class="setting-row">
+        <div class="setting-left">
+          <div class="setting-icon" style="background:rgba(59,130,246,0.15)">🔵</div>
+          <div><div class="setting-label">Auto.ru</div><div class="setting-sub">Прямой API · Cookies</div></div>
+        </div>
+        <span class="status-badge status-ok">Активен</span>
+      </div>
+      <div class="setting-row">
+        <div class="setting-left">
+          <div class="setting-icon" style="background:rgba(34,197,94,0.15)">🟢</div>
+          <div><div class="setting-label">Авито</div><div class="setting-sub">ScraperAPI · 1000 req/мес</div></div>
+        </div>
+        <span class="status-badge status-ok">Активен</span>
+      </div>
+      <div class="setting-row">
+        <div class="setting-left">
+          <div class="setting-icon" style="background:rgba(107,114,128,0.15)">🟠</div>
+          <div><div class="setting-label">Дром</div><div class="setting-sub">Требует RU прокси</div></div>
+        </div>
+        <span class="status-badge status-warn">Отложен</span>
+      </div>
     </div>
   </div>
 
@@ -546,17 +562,17 @@ body.light-force{--bg:#F5F5F7;--bg2:#FFFFFF;--bg3:#F0F0F3;--bg4:#E8E8ED;--border
 <!-- NAV -->
 <button class="back-top" id="back-top" onclick="scrollToTop()">↑</button>
 <nav class="nav">
-  <button class="nav-btn active" id="nav-dashboard" onclick="go('dashboard')">
+  <button class="nav-btn active" id="nav-copart" onclick="go('copart')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 21h18"/><path d="M6 21V10l6-5 6 5v11"/><path d="M10 21v-5h4v5"/><path d="M4 8l8-6 8 6"/></svg>
+    Copart
+  </button>
+  <button class="nav-btn" id="nav-dashboard" onclick="go('dashboard')">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
     Дашборд
   </button>
   <button class="nav-btn" id="nav-listings" onclick="go('listings')">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 12h6M9 8h6M9 16h4"/><path d="M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/></svg>
-    Объявления
-  </button>
-  <button class="nav-btn" id="nav-copart" onclick="go('copart')">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 21h18"/><path d="M6 21V10l6-5 6 5v11"/><path d="M10 21v-5h4v5"/><path d="M4 8l8-6 8 6"/></svg>
-    Copart
+    Прочее
   </button>
   <button class="nav-btn" id="nav-favorites" onclick="go('favorites')" style="position:relative">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
@@ -1274,6 +1290,23 @@ function renderCopart() {
   list.innerHTML = items.map(copartCard).join('');
 }
 
+// Российские площадки временно свёрнуты за одну кнопку —
+// основной источник теперь Copart
+function toggleRuSources() {
+  const box = document.getElementById('ru-sources');
+  const open = box.style.display === 'none';
+  box.style.display = open ? 'block' : 'none';
+  document.getElementById('ru-src-chevron').textContent = open ? '▴' : '▾';
+}
+
+function toggleRuTabs(btn) {
+  const box = document.getElementById('ru-tabs');
+  const open = box.style.display === 'none';
+  box.style.display = open ? 'flex' : 'none';
+  btn.textContent = open ? '🇷🇺 Другие ▴' : '🇷🇺 Другие ▾';
+  btn.classList.toggle('active', open);
+}
+
 let cpSearchTimer = null;
 function searchCopart(q) {
   cpSearch = q.trim();
@@ -1489,6 +1522,8 @@ function getPhotoUrl(l) {
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
+// Copart — стартовая страница: это основной источник
+loadCopart(true);
 loadDashboard();
 loadFavorites();
 loadNotifSettings();

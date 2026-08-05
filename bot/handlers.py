@@ -315,31 +315,80 @@ REGION_CITIES: dict[str, list[str]] = {
 # ── Клавиатуры ────────────────────────────────────────────────────────────────
 
 def _main_menu_kb() -> InlineKeyboardMarkup:
+    """
+    Главный экран построен вокруг Copart. Российские площадки временно
+    убраны в отдельное подменю одной кнопкой внизу — они продолжают
+    работать, просто не занимают первый экран.
+    """
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="🚀 Открыть Mini App",
             web_app={"url": f"{WEBHOOK_HOST}/miniapp"}
         )],
-        [InlineKeyboardButton(text="📋 Мои фильтры",   callback_data="filters_list:0")],
-        [InlineKeyboardButton(text="➕ Новый фильтр",  callback_data="filter_add")],
+        [InlineKeyboardButton(text="🟡 Лоты Copart",        callback_data="copart_lots:0")],
+        [InlineKeyboardButton(text="➕🟡 Новый фильтр Copart", callback_data="copart_add")],
+        [InlineKeyboardButton(text="📋 Мои фильтры Copart", callback_data="filters_list:0")],
         [
-            InlineKeyboardButton(text="🟡 Copart",       callback_data="copart_lots:0"),
-            InlineKeyboardButton(text="➕🟡 Фильтр",     callback_data="copart_add"),
+            InlineKeyboardButton(text="🔍 Поиск лота", callback_data="copart_search"),
+            InlineKeyboardButton(text="📊 Оценки",     callback_data="copart_stats"),
         ],
-        [InlineKeyboardButton(text="📊 Статистика",    callback_data="show_status")],
+        [InlineKeyboardButton(text="📈 Статистика",   callback_data="show_status")],
+        [InlineKeyboardButton(text="🇷🇺 Другие площадки", callback_data="ru_menu")],
     ])
 
 
-def _filters_kb(filters: list, page: int = 0) -> InlineKeyboardMarkup:
+def _ru_menu_kb() -> InlineKeyboardMarkup:
+    """Подменю российских площадок — всё, что раньше было на главном экране."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📋 Фильтры по России", callback_data="ru_filters:0")],
+        [InlineKeyboardButton(text="➕ Новый фильтр по России", callback_data="filter_add")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="main_menu")],
+    ])
+
+
+@router.callback_query(F.data == "ru_menu")
+async def cb_ru_menu(call: CallbackQuery):
+    if not _is_owner(call.from_user.id):
+        await call.answer("⛔", show_alert=True)
+        return
+    try:
+        await call.message.edit_text(
+            "🇷🇺 <b>Российские площадки</b>\n"
+            "<i>🔵 Auto.ru · 🟢 Авито · 🟠 Дром</i>\n\n"
+            "Временно убраны с главного экрана — основной источник теперь "
+            "Copart. Уже созданные фильтры продолжают работать и присылать "
+            "объявления как обычно.",
+            parse_mode="HTML",
+            reply_markup=_ru_menu_kb(),
+        )
+    except Exception:
+        pass
+    await call.answer()
+
+
+def split_by_kind(filters: list) -> tuple[list, list]:
+    """Разделить фильтры на аукционные и российские."""
+    copart = [f for f in filters if _is_copart_filter(f)]
+    ru     = [f for f in filters if not _is_copart_filter(f)]
+    return copart, ru
+
+
+def _filters_kb(filters: list, page: int = 0, kind: str = "copart",
+                ru_count: int = 0) -> InlineKeyboardMarkup:
+    """
+    Список фильтров одного типа. Российские вынесены в отдельный список,
+    чтобы главный экран оставался про Copart.
+    """
+    nav_cb = "filters_list" if kind == "copart" else "ru_filters"
+
     start  = page * PAGE_SIZE
     chunk  = filters[start: start + PAGE_SIZE]
     total  = len(filters)
-    pages  = (total + PAGE_SIZE - 1) // PAGE_SIZE
+    pages  = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
 
     rows = []
     for f in chunk:
         icon  = "✅" if f["is_active"] else "⏸"
-        # Фильтры аукциона помечаем отдельно — у них своя семантика полей
         kind_icon = "🟡 " if _is_copart_filter(f) else ""
         label = f"{icon} {kind_icon}{f['name']}"
         if f["brand"]:
@@ -352,18 +401,27 @@ def _filters_kb(filters: list, page: int = 0) -> InlineKeyboardMarkup:
 
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"filters_list:{page-1}"))
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"{nav_cb}:{page-1}"))
     if pages > 1:
         nav.append(InlineKeyboardButton(text=f"{page+1}/{pages}", callback_data="noop"))
     if page < pages - 1:
-        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"filters_list:{page+1}"))
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"{nav_cb}:{page+1}"))
     if nav:
         rows.append(nav)
 
-    rows.append([
-        InlineKeyboardButton(text="➕ Новый фильтр", callback_data="filter_add"),
-        InlineKeyboardButton(text="🏠 Меню",         callback_data="main_menu"),
-    ])
+    if kind == "copart":
+        rows.append([
+            InlineKeyboardButton(text="➕🟡 Новый фильтр", callback_data="copart_add"),
+            InlineKeyboardButton(text="🏠 Меню",           callback_data="main_menu"),
+        ])
+        if ru_count:
+            rows.append([InlineKeyboardButton(
+                text=f"🇷🇺 Другие площадки ({ru_count})", callback_data="ru_filters:0")])
+    else:
+        rows.append([
+            InlineKeyboardButton(text="➕ Новый фильтр", callback_data="filter_add"),
+            InlineKeyboardButton(text="◀️ Назад",        callback_data="ru_menu"),
+        ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -765,24 +823,24 @@ async def cmd_start(message: Message):
         return
     await message.answer(
         "👋 <b>Привет! Это Car Monitor Bot</b>\n\n"
-        "Я слежу за новыми объявлениями о продаже авто на <b>Auto.ru</b> и <b>Авито</b>, "
-        "а также за лотами аукциона <b>Copart</b> — и сразу присылаю уведомление, "
-        "когда появляется что-то подходящее.\n\n"
+        "🟡 <b>Основной источник — аукцион Copart.</b>\n"
+        "Битые и залоговые авто из США и Канады. Я слежу за лотами "
+        "и присылаю подходящие с фото, оценкой стоимости, характером "
+        "повреждения и датой торгов.\n\n"
+
         "🚀 <b>Как начать:</b>\n"
-        "1️⃣ Нажми <b>«➕ Новый фильтр»</b> — выбери марку, модель, цену, город\n"
-        "2️⃣ На последнем шаге выбери <b>источники</b> — где искать\n"
-        "3️⃣ Бот начнёт проверять площадки каждые 14 минут и пришлёт находки сюда\n\n"
-        "🟡 <b>Про Copart</b>\n"
-        "Это аукцион битых авто из США и Канады. По умолчанию он <b>выключен</b> — "
-        "чтобы он заработал, его нужно выбрать явно:\n"
-        "• в новом фильтре — на шаге «Источники» кнопка <b>«🟡 Copart»</b> "
-        "или <b>«🌍 Всё вместе»</b>\n"
-        "• в готовом фильтре — <b>«✏️ Изменить» → «📡 Источники»</b>\n\n"
-        "Марку и модель для него пиши <b>латиницей</b> (например <code>CHEVROLET CRUZE</code>). "
-        "Подробности — кнопка «🟡 Copart» ниже.\n\n"
-        "📱 <b>Mini App</b> — удобный интерфейс для просмотра всех объявлений, "
-        "фильтров и статистики. Открывается кнопкой ниже.\n\n"
-        "Источники: 🔵 Auto.ru · 🟢 Авито · 🟡 Copart",
+        "1️⃣ <b>«➕🟡 Новый фильтр Copart»</b> — марка и модель выбираются "
+        "из списка самого аукциона\n"
+        "2️⃣ На последнем шаге можно <b>проверить</b>, что найдётся — "
+        "не дожидаясь обхода\n"
+        "3️⃣ Дальше бот сам проверяет аукцион каждые 14 минут\n\n"
+
+        "📱 <b>Mini App</b> — лоты с фотографиями, быстрые фильтры "
+        "и расчёт стоимости «под ключ». Кнопка ниже.\n\n"
+
+        "<i>🇷🇺 Auto.ru, Авито и Дром временно убраны с главного экрана — "
+        "они под кнопкой «Другие площадки». Созданные раньше фильтры "
+        "продолжают работать.</i>",
         parse_mode="HTML",
         reply_markup=_main_menu_kb(),
     )
@@ -809,31 +867,39 @@ async def cmd_help(message: Message):
     if not _is_owner(message.from_user.id):
         return
     await message.answer(
-        "<b>📖 Как пользоваться ботом</b>\n\n"
+        "<b>📖 Как пользоваться ботом</b>\n"
+        "<i>Основной источник — аукцион Copart</i>\n\n"
+
         "<b>Шаг 1 — Создай фильтр</b>\n"
-        "Нажми «➕ Новый фильтр» → выбери марку, модель, год, цену, город и КПП. "
-        "На последнем шаге выбери источники — где искать. "
-        "Можно создать несколько фильтров для разных машин.\n\n"
-        "<b>Шаг 2 — Жди уведомлений</b>\n"
-        "Бот проверяет площадки каждые 14 минут. "
-        "Как только появится новое объявление — сразу пришлёт тебе с кнопкой «Открыть».\n\n"
-        "<b>Шаг 3 — Управляй через Mini App</b>\n"
-        "Нажми «🚀 Открыть Mini App» — там можно:\n"
-        "• смотреть все найденные объявления\n"
-        "• добавлять в избранное ⭐️\n"
-        "• смотреть статистику и графики\n"
-        "• настраивать тихие часы и порог цены\n\n"
-        "<b>🟡 Как включить Copart</b>\n"
-        "Аукцион битых авто из США. По умолчанию выключен — включается явно:\n"
-        "• новый фильтр → шаг «Источники» → «🟡 Copart» или «🌍 Всё вместе»\n"
-        "• готовый фильтр → «✏️ Изменить» → «📡 Источники»\n"
-        "Полная инструкция — кнопка ниже.\n\n"
+        "«➕🟡 Новый фильтр Copart» → марка и модель выбираются из списка "
+        "самого аукциона, цена в долларах, пробег в милях. "
+        "Можно ограничить типом документа, повреждениями и штатами площадок.\n\n"
+
+        "<b>Шаг 2 — Проверь до сохранения</b>\n"
+        "На последнем шаге — «🔎 Сначала посмотреть, что найдётся». "
+        "Покажет количество лотов и примеры, чтобы не ждать обхода зря.\n\n"
+
+        "<b>Шаг 3 — Жди уведомлений</b>\n"
+        "Бот проверяет аукцион каждые 14 минут и присылает лоты с фото, "
+        "оценкой, повреждением и датой торгов.\n\n"
+
+        "<b>Шаг 4 — Mini App</b>\n"
+        "«🚀 Открыть Mini App» — лоты с фотографиями, быстрые фильтры "
+        "(на ходу, чистый документ, купить сразу), расчёт «под ключ», "
+        "избранное и настройки тихих часов.\n\n"
+
+        "<b>Полезное в разделе 🟡 Лоты Copart:</b>\n"
+        "🔍 поиск по номеру лота и VIN\n"
+        "📊 разброс оценок по модели, году, повреждению\n"
+        "🧮 расчёт итоговой стоимости\n\n"
+
         "<b>Команды:</b>\n"
         "/start — главное меню\n"
-        "/filters — управление фильтрами\n"
+        "/filters — фильтры Copart\n"
         "/status — статистика\n\n"
-        "<b>Источники:</b> 🔵 Auto.ru · 🟢 Авито · 🟡 Copart\n"
-        "<i>Дром временно недоступен (блокировка IP)</i>",
+
+        "<i>🇷🇺 Auto.ru, Авито и Дром — под кнопкой «Другие площадки». "
+        "Прежние фильтры работают, просто не занимают главный экран.</i>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🟡 Как настроить Copart",
@@ -901,30 +967,74 @@ async def cmd_filters(message: Message):
             ]),
         )
         return
+    copart, ru = split_by_kind(filters)
     await message.answer(
-        f"<b>📋 Фильтры</b>  <i>({len(filters)} шт.)</i>",
+        _filters_header(copart, ru),
         parse_mode="HTML",
-        reply_markup=_filters_kb(filters, page=0),
+        reply_markup=_filters_kb(copart, 0, "copart", len(ru)),
     )
+
+
+def _filters_header(copart: list, ru: list) -> str:
+    head = f"🟡 <b>Фильтры Copart</b>  <i>({len(copart)} шт.)</i>"
+    if ru:
+        head += f"\n<i>Ещё {len(ru)} по российским площадкам — кнопка внизу</i>"
+    return head
+
+
+EMPTY_COPART_KB = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="➕🟡 Создать фильтр Copart", callback_data="copart_add")],
+    [InlineKeyboardButton(text="🇷🇺 Другие площадки", callback_data="ru_menu")],
+    [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
+])
 
 
 @router.callback_query(F.data.startswith("filters_list:"))
 async def cb_filters_list(call: CallbackQuery):
+    """Основной список — фильтры Copart."""
     page    = int(call.data.split(":")[1])
     filters = await get_active_filters(OWNER_ID)
-    if not filters:
+    copart, ru = split_by_kind(filters)
+
+    if not copart:
+        note = (f"\n\nПо российским площадкам есть {len(ru)} — "
+                f"они в «Другие площадки»." if ru else "")
         await call.message.edit_text(
-            "📋 Фильтров пока нет.",
+            f"🟡 <b>Фильтров Copart пока нет.</b>{note}",
+            parse_mode="HTML",
+            reply_markup=EMPTY_COPART_KB,
+        )
+    else:
+        await call.message.edit_text(
+            _filters_header(copart, ru),
+            parse_mode="HTML",
+            reply_markup=_filters_kb(copart, page, "copart", len(ru)),
+        )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("ru_filters:"))
+async def cb_ru_filters(call: CallbackQuery):
+    """Список фильтров по российским площадкам — за отдельной кнопкой."""
+    page    = int(call.data.split(":")[1])
+    filters = await get_active_filters(OWNER_ID)
+    _, ru = split_by_kind(filters)
+
+    if not ru:
+        await call.message.edit_text(
+            "🇷🇺 <b>Фильтров по российским площадкам нет.</b>",
+            parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="➕ Создать фильтр", callback_data="filter_add")],
-                [InlineKeyboardButton(text="🏠 Меню",           callback_data="main_menu")],
+                [InlineKeyboardButton(text="➕ Создать", callback_data="filter_add")],
+                [InlineKeyboardButton(text="◀️ Назад",  callback_data="ru_menu")],
             ]),
         )
     else:
         await call.message.edit_text(
-            f"<b>📋 Фильтры</b>  <i>({len(filters)} шт.)</i>",
+            f"🇷🇺 <b>Фильтры по России</b>  <i>({len(ru)} шт.)</i>\n"
+            f"<i>🔵 Auto.ru · 🟢 Авито · 🟠 Дром</i>",
             parse_mode="HTML",
-            reply_markup=_filters_kb(filters, page=page),
+            reply_markup=_filters_kb(ru, page, "ru"),
         )
     await call.answer()
 
@@ -2335,9 +2445,14 @@ async def cpw_finish(call: CallbackQuery, state: FSMContext):
         f"<i>Лоты придут после ближайшего обхода.</i>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📋 К фильтрам", callback_data="filters_list:0")],
-            [InlineKeyboardButton(text="🟡 Лоты",       callback_data="copart_lots:0")],
-            [InlineKeyboardButton(text="🏠 Меню",       callback_data="main_menu")],
+            # Прямая ссылка на карточку — оттуда правка, проверка и удаление
+            [InlineKeyboardButton(text="⚙️ Открыть фильтр",
+                                  callback_data=f"filter_info:{f['id']}")],
+            [
+                InlineKeyboardButton(text="📋 Все фильтры", callback_data="filters_list:0"),
+                InlineKeyboardButton(text="🟡 Лоты",        callback_data="copart_lots:0"),
+            ],
+            [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
         ]),
     )
     await call.answer("✅ Создан")
@@ -2715,15 +2830,19 @@ async def cb_copart_lots(call: CallbackQuery):
         await call.message.edit_text(
             "🟡 <b>Copart</b>\n\n"
             "Лотов пока нет.\n\n"
-            "Аукцион по умолчанию выключен. Чтобы он заработал, добавь источник "
-            "<b>Copart</b> в фильтр: «✏️ Изменить» → «📡 Источники» → «🟡 Copart». "
-            "Лоты появятся после ближайшего обхода (раз в 14 минут).",
+            "Создай фильтр Copart — бот подберёт лоты и пришлёт их сюда "
+            "после ближайшего обхода (раз в 14 минут).",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="➕🟡 Создать фильтр Copart",
                                       callback_data="copart_add")],
-                [InlineKeyboardButton(text="❓ Как настроить", callback_data="copart_help")],
-                [InlineKeyboardButton(text="🏠 Меню",        callback_data="main_menu")],
+                [
+                    InlineKeyboardButton(text="📋 Мои фильтры",
+                                         callback_data="filters_list:0"),
+                    InlineKeyboardButton(text="❓ Как настроить",
+                                         callback_data="copart_help"),
+                ],
+                [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
             ]),
         )
         await call.answer()
@@ -2751,9 +2870,10 @@ async def cb_copart_lots(call: CallbackQuery):
                 InlineKeyboardButton(text="📊 Оценки",     callback_data="copart_stats"),
             ],
             [
-                InlineKeyboardButton(text="❓ Как настроить", callback_data="copart_help"),
-                InlineKeyboardButton(text="🏠 Меню",          callback_data="main_menu"),
+                InlineKeyboardButton(text="📋 Мои фильтры", callback_data="filters_list:0"),
+                InlineKeyboardButton(text="❓ Справка",      callback_data="copart_help"),
             ],
+            [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
         ]),
     )
     await call.answer()
