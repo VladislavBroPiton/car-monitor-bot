@@ -7,7 +7,12 @@
 #   Content-Type: application/json
 #
 # Это тот же самый запрос, который делает сам сайт при поиске авто.
-# ScraperAPI не нужен — endpoint отвечает напрямую, без авторизации и капчи.
+# Авторизация и капча не нужны, но есть нюанс с IP:
+#   • с обычного (домашнего) IP endpoint отвечает JSON сразу;
+#   • с IP дата-центра — например с Render — Incapsula может вернуть
+#     HTML-заглушку со статусом 200. Поэтому сессия сначала прогревается
+#     обычным заходом на страницу поиска (см. _copart_session), а если и это
+#     не помогло, запрос повторяется через ScraperAPI при заданном ключе.
 # (Поддомен api.copart.com отдаёт 403 — он для мобильных приложений с ключом.)
 #
 # Тело запроса:
@@ -58,12 +63,15 @@
 
 import asyncio
 import datetime
+import json
 import logging
+from contextlib import asynccontextmanager
 from typing import Optional
+from urllib.parse import quote
 
 import aiohttp
 
-from config import USD_RUB_RATE
+from config import USD_RUB_RATE, SCRAPER_API_KEY
 from rates import cached_rate
 from parsers.base import BaseParser, Listing, SearchFilter
 
@@ -186,17 +194,36 @@ DAMAGE_RU.update({
     "NON REPAIRABLE": "Не восстановить",
 })
 
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+
 HEADERS = {
     "Content-Type": "application/json",
     "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
     "Origin": "https://www.copart.com",
     "Referer": "https://www.copart.com/lotSearchResults",
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": USER_AGENT,
+    "X-Requested-With": "XMLHttpRequest",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Dest": "empty",
 }
+
+# Заголовки обычного перехода по ссылке — для прогрева сессии
+PAGE_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "User-Agent": USER_AGENT,
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Dest": "document",
+}
+
+WARMUP_URL = "https://www.copart.com/lotSearchResults"
 
 
 def damage_ru(value: Optional[str]) -> str:
@@ -481,16 +508,90 @@ def _matches(listing: Listing, f: SearchFilter, model_client_side: bool) -> bool
 
 # ── HTTP ──────────────────────────────────────────────────────────────────────
 
+def _looks_like_challenge(body: str) -> bool:
+    """Признаки страницы защиты вместо JSON."""
+    head = body[:2000].lower()
+    return any(marker in head for marker in
+               ("_incapsula_", "incapsula", "captcha", "<html", "distil",
+                "access denied", "request unsuccessful"))
+
+
+@asynccontextmanager
+async def _copart_session():
+    """
+    Сессия с cookie-jar и прогревом.
+
+    С домашнего IP endpoint отвечает и без этого, но с IP дата-центра
+    (Render) Incapsula возвращает HTML-заглушку со статусом 200.
+    Обычный заход на страницу поиска выдаёт нужные cookie, после чего
+    тот же запрос проходит.
+    """
+    session = aiohttp.ClientSession(cookie_jar=aiohttp.CookieJar())
+    try:
+        try:
+            async with session.get(WARMUP_URL, headers=PAGE_HEADERS,
+                                   timeout=TIMEOUT) as resp:
+                await resp.read()
+                logger.debug(f"copart: прогрев {resp.status}, "
+                             f"cookie: {len(session.cookie_jar)}")
+        except Exception as e:
+            logger.warning(f"copart: прогрев не удался: {e}")
+        yield session
+    finally:
+        await session.close()
+
+
+async def _post_via_scraperapi(payload: dict) -> Optional[str]:
+    """Запасной путь: тот же POST, но чужими руками и с другого IP."""
+    if not SCRAPER_API_KEY:
+        return None
+    url = (f"https://api.scraperapi.com/?api_key={SCRAPER_API_KEY}"
+           f"&url={quote(SEARCH_URL, safe='')}&keep_headers=true")
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, headers=HEADERS,
+                                    timeout=aiohttp.ClientTimeout(total=90)) as resp:
+                body = await resp.text()
+                if resp.status != 200:
+                    logger.warning(f"copart: ScraperAPI HTTP {resp.status}")
+                    return None
+                return body
+    except Exception as e:
+        logger.error(f"copart: ScraperAPI ошибка: {e}")
+        return None
+
+
 async def _post(session: aiohttp.ClientSession, payload: dict) -> Optional[dict]:
+    body: Optional[str] = None
+
     try:
         async with session.post(SEARCH_URL, json=payload, headers=HEADERS,
                                 timeout=TIMEOUT) as resp:
-            if resp.status != 200:
-                logger.warning(f"copart: HTTP {resp.status} от search-results")
-                return None
-            data = await resp.json(content_type=None)
+            body = await resp.text()
+            status, ctype = resp.status, resp.headers.get("Content-Type", "")
     except Exception as e:
-        logger.error(f"copart: ошибка запроса: {e}")
+        logger.error(f"copart: сеть недоступна: {e}")
+        return None
+
+    if status != 200 or _looks_like_challenge(body):
+        # Раньше здесь падал JSONDecodeError без единой подробности,
+        # и по логам нельзя было понять, что вместо JSON приходит HTML
+        logger.warning(
+            f"copart: вместо JSON пришло HTTP {status}, "
+            f"Content-Type={ctype!r}, {len(body)} байт. "
+            f"Начало: {body[:160]!r}"
+        )
+        body = await _post_via_scraperapi(payload)
+        if not body:
+            logger.error("copart: ни прямой запрос, ни ScraperAPI не дали JSON")
+            return None
+        logger.info("copart: получено через ScraperAPI")
+
+    try:
+        data = json.loads(body)
+    except Exception as e:
+        logger.error(f"copart: ответ не разобрался как JSON: {e}. "
+                     f"Начало: {body[:160]!r}")
         return None
 
     if data.get("returnCode") != 1:
@@ -575,7 +676,7 @@ async def _fetch_facet(cache_key: str, code: str, flt: dict) -> list[tuple[str, 
         "specificRowProvided": False, "displayName": "", "searchName": "",
         "backPage": "search",
     }
-    async with aiohttp.ClientSession() as session:
+    async with _copart_session() as session:
         results = await _post(session, payload)
     if not results:
         return cached[1] if cached else []
@@ -617,7 +718,7 @@ class CopartParser(BaseParser):
                         f"фильтр «{f.name}» пропущен")
             return []
 
-        async with aiohttp.ClientSession() as session:
+        async with _copart_session() as session:
             # Сначала пробуем точный facet по модели
             raw_lots = await _fetch_pages(session, f, with_model=True)
             model_client_side = False
@@ -667,7 +768,7 @@ class CopartParser(BaseParser):
             return {"total": 0, "matched": 0, "checked": 0, "sample": [],
                     "note": f"Марок {names} на аукционе нет — это рынок США"}
 
-        async with aiohttp.ClientSession() as session:
+        async with _copart_session() as session:
             results = await _post(session, _build_payload(f, 0, with_model=True))
             model_client_side = False
 

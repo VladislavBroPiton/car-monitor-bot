@@ -188,6 +188,74 @@ def create_scheduler_router(bot: Bot) -> APIRouter:
         result = await run_parsers(bot)
         return result
 
+    @router.get("/debug/copart")
+    async def debug_copart():
+        """
+        Что реально отдаёт Copart с этого сервера.
+        Нужен потому, что с домашнего IP endpoint отвечает JSON,
+        а с IP дата-центра может прилетать страница защиты.
+        """
+        import aiohttp
+        from parsers.copart import (
+            SEARCH_URL, WARMUP_URL, HEADERS, PAGE_HEADERS, TIMEOUT,
+            _looks_like_challenge, _build_payload,
+        )
+        from parsers.base import SearchFilter
+
+        out = {}
+        payload = _build_payload(
+            SearchFilter(id=0, user_id=0, name="debug", brand="CHEVROLET",
+                         kind="copart", sources=["copart"]), 0)
+        payload["size"] = 1
+
+        # 1. Прямой POST без прогрева
+        async with aiohttp.ClientSession() as s:
+            try:
+                async with s.post(SEARCH_URL, json=payload, headers=HEADERS,
+                                  timeout=TIMEOUT) as r:
+                    body = await r.text()
+                out["без_прогрева"] = {
+                    "status": r.status,
+                    "content_type": r.headers.get("Content-Type"),
+                    "bytes": len(body),
+                    "похоже_на_защиту": _looks_like_challenge(body),
+                    "начало": body[:300],
+                }
+            except Exception as e:
+                out["без_прогрева"] = {"ошибка": str(e)}
+
+        # 2. С прогревом и cookie
+        jar = aiohttp.CookieJar()
+        async with aiohttp.ClientSession(cookie_jar=jar) as s:
+            try:
+                async with s.get(WARMUP_URL, headers=PAGE_HEADERS,
+                                 timeout=TIMEOUT) as r:
+                    warm = await r.text()
+                out["прогрев"] = {
+                    "status": r.status, "bytes": len(warm),
+                    "cookie": [c.key for c in jar],
+                }
+            except Exception as e:
+                out["прогрев"] = {"ошибка": str(e)}
+
+            try:
+                async with s.post(SEARCH_URL, json=payload, headers=HEADERS,
+                                  timeout=TIMEOUT) as r:
+                    body = await r.text()
+                out["после_прогрева"] = {
+                    "status": r.status,
+                    "content_type": r.headers.get("Content-Type"),
+                    "bytes": len(body),
+                    "похоже_на_защиту": _looks_like_challenge(body),
+                    "начало": body[:300],
+                }
+            except Exception as e:
+                out["после_прогрева"] = {"ошибка": str(e)}
+
+        from config import SCRAPER_API_KEY
+        out["scraperapi_ключ_задан"] = bool(SCRAPER_API_KEY)
+        return out
+
     @router.get("/debug/drom")
     async def debug_drom():
         import asyncio, random, aiohttp
