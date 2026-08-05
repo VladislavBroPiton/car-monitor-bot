@@ -1,7 +1,7 @@
 # miniapp_api.py — REST API для Mini App
 import logging
 from typing import Optional
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import HTMLResponse
 from pathlib import Path
 from pydantic import BaseModel
@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from db.repository import get_pool, get_active_filters, delete_filter, toggle_filter
 from config import OWNER_ID
 from rates import usd_rub
+from auth import current_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
@@ -17,18 +18,26 @@ router = APIRouter(prefix="/api")
 # ── Stats ─────────────────────────────────────────────────────────────────────
 
 @router.get("/stats")
-async def api_stats():
+async def api_stats(user_id: int = Depends(current_user)):
     pool = await get_pool()
-    seen_total     = await pool.fetchval("SELECT COUNT(*) FROM seen_listings")
-    seen_24h       = await pool.fetchval("SELECT COUNT(*) FROM seen_listings WHERE created_at > NOW() - INTERVAL '24 hours'")
-    seen_1h        = await pool.fetchval("SELECT COUNT(*) FROM seen_listings WHERE created_at > NOW() - INTERVAL '1 hour'")
-    active_filters = await pool.fetchval("SELECT COUNT(*) FROM filters WHERE user_id=$1 AND is_active=TRUE", OWNER_ID)
+    # Считаем присланное этому пользователю, а не всю базу
+    seen_total = await pool.fetchval(
+        "SELECT COUNT(*) FROM user_seen WHERE user_id=$1", user_id)
+    seen_24h = await pool.fetchval(
+        "SELECT COUNT(*) FROM user_seen WHERE user_id=$1 "
+        "AND created_at > NOW() - INTERVAL '24 hours'", user_id)
+    seen_1h = await pool.fetchval(
+        "SELECT COUNT(*) FROM user_seen WHERE user_id=$1 "
+        "AND created_at > NOW() - INTERVAL '1 hour'", user_id)
+    active_filters = await pool.fetchval("SELECT COUNT(*) FROM filters WHERE user_id=$1 AND is_active=TRUE", user_id)
 
     # Последние объявления — с валютой, иначе доллары подписываются рублями
     recent = await pool.fetch(
-        """SELECT source, external_id, url, title, price, city, created_at,
-                  currency, image_url
-           FROM seen_listings ORDER BY created_at DESC LIMIT 20"""
+        """SELECT s.source, s.external_id, s.url, s.title, s.price, s.city,
+                  us.created_at, s.currency, s.image_url
+           FROM user_seen us JOIN seen_listings s ON s.source = us.source AND s.external_id = us.external_id WHERE us.user_id = $1
+           ORDER BY us.created_at DESC LIMIT 20""",
+        user_id,
     )
 
     # Топ дешёвых за 24 часа.
@@ -36,35 +45,37 @@ async def api_stats():
     # числу нельзя, иначе аукцион вытеснит всё остальное. Приводим к рублям.
     rate = await usd_rub()
     top_deals = await pool.fetch(
-        """SELECT source, external_id, url, title, price, city, created_at,
-                  currency, image_url,
-                  CASE WHEN source = 'copart' THEN ROUND(price * $1)::INT
-                       ELSE price END AS price_rub
-           FROM seen_listings
-           WHERE created_at > NOW() - INTERVAL '24 hours'
-             AND price IS NOT NULL AND price > 0
+        """SELECT s.source, s.external_id, s.url, s.title, s.price, s.city,
+                  us.created_at, s.currency, s.image_url,
+                  CASE WHEN s.source = 'copart' THEN ROUND(s.price * $2)::INT
+                       ELSE s.price END AS price_rub
+           FROM user_seen us JOIN seen_listings s ON s.source = us.source AND s.external_id = us.external_id WHERE us.user_id = $1
+             AND us.created_at > NOW() - INTERVAL '24 hours'
+             AND s.price IS NOT NULL AND s.price > 0
            ORDER BY price_rub ASC LIMIT 10""",
-        rate,
+        user_id, rate,
     )
 
     # Активность по часам за последние 24ч (для графика)
     hourly = await pool.fetch(
         """
-        SELECT DATE_TRUNC('hour', created_at) as hour, COUNT(*) as cnt
-        FROM seen_listings
-        WHERE created_at > NOW() - INTERVAL '24 hours'
+        SELECT DATE_TRUNC('hour', us.created_at) as hour, COUNT(*) as cnt
+        FROM user_seen us
+        WHERE us.user_id = $1 AND us.created_at > NOW() - INTERVAL '24 hours'
         GROUP BY hour ORDER BY hour
-        """
+        """,
+        user_id,
     )
 
     # Активность по дням за 7 дней
     daily = await pool.fetch(
         """
-        SELECT DATE_TRUNC('day', created_at) as day, COUNT(*) as cnt
-        FROM seen_listings
-        WHERE created_at > NOW() - INTERVAL '7 days'
+        SELECT DATE_TRUNC('day', us.created_at) as day, COUNT(*) as cnt
+        FROM user_seen us
+        WHERE us.user_id = $1 AND us.created_at > NOW() - INTERVAL '7 days'
         GROUP BY day ORDER BY day
-        """
+        """,
+        user_id,
     )
 
     return {
@@ -83,25 +94,28 @@ async def api_stats():
 # ── Listings ──────────────────────────────────────────────────────────────────
 
 @router.get("/listings")
-async def api_listings(page: int = 1, source: str = "", limit: int = 20):
+async def api_listings(page: int = 1, source: str = "", limit: int = 20,
+                       user_id: int = Depends(current_user)):
     pool = await get_pool()
     offset = (page - 1) * limit
 
+    # Только объявления этого пользователя
+    join = ("FROM user_seen us JOIN seen_listings s "
+            "ON s.source = us.source AND s.external_id = us.external_id "
+            "WHERE us.user_id = $1")
+    args: list = [user_id]
+    if source:
+        args.append(source)
+        join += f" AND s.source = ${len(args)}"
+
     try:
-        if source:
-            rows = await pool.fetch(
-                "SELECT * FROM seen_listings WHERE source = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-                source, limit, offset
-            )
-            total = await pool.fetchval(
-                "SELECT COUNT(*) FROM seen_listings WHERE source = $1", source
-            )
-        else:
-            rows = await pool.fetch(
-                "SELECT * FROM seen_listings ORDER BY created_at DESC LIMIT $1 OFFSET $2",
-                limit, offset
-            )
-            total = await pool.fetchval("SELECT COUNT(*) FROM seen_listings")
+        total = await pool.fetchval(f"SELECT COUNT(*) {join}", *args)
+        rows = await pool.fetch(
+            f"""SELECT s.*, us.created_at {join}
+                ORDER BY us.created_at DESC
+                LIMIT ${len(args) + 1} OFFSET ${len(args) + 2}""",
+            *args, limit, offset,
+        )
 
         def row_to_dict(r):
             d = dict(r)
@@ -134,6 +148,7 @@ async def api_copart_listings(
     rnd: bool = False,
     buynow: bool = False,
     keys: bool = False,
+    user_id: int = Depends(current_user),
 ):
     """
     Лоты аукциона Copart. Цены — в долларах (валюта торгов),
@@ -146,41 +161,42 @@ async def api_copart_listings(
     offset = (page - 1) * limit
 
     order = {
-        "date":         "created_at DESC",
-        "price_asc":    "price ASC NULLS LAST",
-        "price_desc":   "price DESC NULLS LAST",
-        "year_desc":    "year DESC NULLS LAST",
-        "mileage_asc":  "mileage ASC NULLS LAST",
-        "auction_soon": "auction_date ASC NULLS LAST",
-    }.get(sort, "created_at DESC")
+        "date":         "us.created_at DESC",
+        "price_asc":    "s.price ASC NULLS LAST",
+        "price_desc":   "s.price DESC NULLS LAST",
+        "year_desc":    "s.year DESC NULLS LAST",
+        "mileage_asc":  "s.mileage ASC NULLS LAST",
+        "auction_soon": "s.auction_date ASC NULLS LAST",
+    }.get(sort, "us.created_at DESC")
 
-    where = ["source = 'copart'"]
-    params: list = []
+    # Показываем только те лоты, которые присылали этому пользователю
+    where = ["us.user_id = $1", "s.source = 'copart'"]
+    params: list = [user_id]
 
     if q.strip():
         params.append(f"%{q.strip().upper()}%")
+        n = len(params)
         where.append(
-            f"(UPPER(title) LIKE ${len(params)} OR UPPER(city) LIKE ${len(params)}"
-            f" OR external_id LIKE ${len(params)} OR vin LIKE ${len(params)})"
+            f"(UPPER(s.title) LIKE ${n} OR UPPER(s.city) LIKE ${n}"
+            f" OR s.external_id LIKE ${n} OR s.vin LIKE ${n})"
         )
     if clean:
-        where.append("UPPER(title_group) = 'CLEAN TITLE'")
+        where.append("UPPER(s.title_group) = 'CLEAN TITLE'")
     if rnd:
-        where.append("run_and_drive IS TRUE")
+        where.append("s.run_and_drive IS TRUE")
     if buynow:
-        where.append("buy_now_price IS NOT NULL AND buy_now_price > 0")
+        where.append("s.buy_now_price IS NOT NULL AND s.buy_now_price > 0")
     if keys:
-        where.append("(has_keys IS NULL OR UPPER(has_keys) <> 'NO')")
+        where.append("(s.has_keys IS NULL OR UPPER(s.has_keys) <> 'NO')")
 
-    where_sql = " AND ".join(where)
+    join_sql = ("FROM user_seen us JOIN seen_listings s "
+                "ON s.source = us.source AND s.external_id = us.external_id "
+                "WHERE " + " AND ".join(where))
 
     try:
-        total = await pool.fetchval(
-            f"SELECT COUNT(*) FROM seen_listings WHERE {where_sql}", *params
-        )
+        total = await pool.fetchval(f"SELECT COUNT(*) {join_sql}", *params)
         rows = await pool.fetch(
-            f"""SELECT * FROM seen_listings
-                WHERE {where_sql}
+            f"""SELECT s.* {join_sql}
                 ORDER BY {order}
                 LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}""",
             *params, limit, offset,
@@ -205,38 +221,46 @@ async def api_copart_listings(
 
 
 @router.get("/copart/overview")
-async def api_copart_overview():
+async def api_copart_overview(user_id: int = Depends(current_user)):
     """Сводка по аукциону для дашборда."""
     pool = await get_pool()
     rate = await usd_rub()
 
     row = await pool.fetchrow(
         """
-        SELECT COUNT(*)                                      AS total,
-               COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours') AS new_24h,
-               COUNT(*) FILTER (WHERE run_and_drive IS TRUE) AS run_drive,
-               COUNT(*) FILTER (WHERE UPPER(title_group) = 'CLEAN TITLE') AS clean,
-               COUNT(*) FILTER (WHERE buy_now_price > 0)     AS buy_now,
-               ROUND(AVG(price))::INT                        AS avg_price,
-               MIN(price)                                    AS min_price
-        FROM seen_listings WHERE source = 'copart'
-        """
+        SELECT COUNT(*) AS total,
+               COUNT(*) FILTER (WHERE us.created_at > NOW() - INTERVAL '24 hours') AS new_24h,
+               COUNT(*) FILTER (WHERE s.run_and_drive IS TRUE) AS run_drive,
+               COUNT(*) FILTER (WHERE UPPER(s.title_group) = 'CLEAN TITLE') AS clean,
+               COUNT(*) FILTER (WHERE s.buy_now_price > 0) AS buy_now,
+               ROUND(AVG(s.price))::INT AS avg_price,
+               MIN(s.price) AS min_price
+        FROM user_seen us JOIN seen_listings s
+        ON s.source = us.source AND s.external_id = us.external_id
+        WHERE us.user_id = $1 AND s.source = 'copart'
+        """,
+        user_id,
     )
 
     auctions = await pool.fetch(
         """
         SELECT COUNT(*) AS cnt,
-               COUNT(*) FILTER (WHERE auction_date < NOW() + INTERVAL '24 hours') AS today,
-               COUNT(*) FILTER (WHERE auction_date < NOW() + INTERVAL '7 days')   AS week
-        FROM seen_listings
-        WHERE source = 'copart' AND auction_date > NOW()
-        """
+               COUNT(*) FILTER (WHERE s.auction_date < NOW() + INTERVAL '24 hours') AS today,
+               COUNT(*) FILTER (WHERE s.auction_date < NOW() + INTERVAL '7 days') AS week
+        FROM user_seen us JOIN seen_listings s
+        ON s.source = us.source AND s.external_id = us.external_id
+        WHERE us.user_id = $1 AND s.source = 'copart' AND s.auction_date > NOW()
+        """,
+        user_id,
     )
 
     damages = await pool.fetch(
-        """SELECT COALESCE(damage_description, 'НЕ УКАЗАНО') AS name, COUNT(*) AS cnt
-           FROM seen_listings WHERE source = 'copart'
-           GROUP BY name ORDER BY cnt DESC LIMIT 6"""
+        """SELECT COALESCE(s.damage_description, 'НЕ УКАЗАНО') AS name, COUNT(*) AS cnt
+        FROM user_seen us JOIN seen_listings s
+        ON s.source = us.source AND s.external_id = us.external_id
+        WHERE us.user_id = $1 AND s.source = 'copart'
+           GROUP BY name ORDER BY cnt DESC LIMIT 6""",
+        user_id,
     )
 
     return {
@@ -248,15 +272,17 @@ async def api_copart_overview():
 
 
 @router.get("/copart/stats")
-async def api_copart_stats(group: str = "model"):
+async def api_copart_stats(group: str = "model",
+                           user_id: int = Depends(current_user)):
     """Разброс оценочных стоимостей по накопленным лотам."""
     from db.repository import copart_price_stats
-    rows = await copart_price_stats(group)
+    rows = await copart_price_stats(user_id, group)
     return [dict(r) for r in rows]
 
 
 @router.get("/copart/cost/{external_id}")
-async def api_copart_cost(external_id: str):
+async def api_copart_cost(external_id: str,
+                          user_id: int = Depends(current_user)):
     """Прикидка стоимости «под ключ» по сохранённому лоту."""
     from costs import estimate
     pool = await get_pool()
@@ -276,8 +302,8 @@ async def api_copart_cost(external_id: str):
 # ── Filters ───────────────────────────────────────────────────────────────────
 
 @router.get("/filters")
-async def api_filters():
-    filters = await get_active_filters(OWNER_ID)
+async def api_filters(user_id: int = Depends(current_user)):
+    filters = await get_active_filters(user_id)
     return [{
         "id":           f["id"],
         "name":         f["name"],
@@ -309,14 +335,16 @@ class ToggleBody(BaseModel):
     active: bool
 
 @router.post("/filters/{filter_id}/toggle")
-async def api_toggle_filter(filter_id: int, body: ToggleBody):
-    ok = await toggle_filter(filter_id, OWNER_ID, body.active)
+async def api_toggle_filter(filter_id: int, body: ToggleBody,
+                            user_id: int = Depends(current_user)):
+    ok = await toggle_filter(filter_id, user_id, body.active)
     return {"ok": ok}
 
 
 @router.delete("/filters/{filter_id}")
-async def api_delete_filter(filter_id: int):
-    ok = await delete_filter(filter_id, OWNER_ID)
+async def api_delete_filter(filter_id: int,
+                            user_id: int = Depends(current_user)):
+    ok = await delete_filter(filter_id, user_id)
     return {"ok": ok}
 
 
@@ -335,17 +363,18 @@ class FavItem(BaseModel):
 
 
 @router.get("/favorites")
-async def api_get_favorites():
+async def api_get_favorites(user_id: int = Depends(current_user)):
     pool = await get_pool()
     rows = await pool.fetch(
         "SELECT * FROM favorites WHERE user_id=$1 ORDER BY created_at DESC",
-        OWNER_ID
+        user_id
     )
     return [dict(r) for r in rows]
 
 
 @router.post("/favorites")
-async def api_add_favorite(item: FavItem):
+async def api_add_favorite(item: FavItem,
+                           user_id: int = Depends(current_user)):
     pool = await get_pool()
     try:
         await pool.execute(
@@ -355,7 +384,7 @@ async def api_add_favorite(item: FavItem):
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
             ON CONFLICT (user_id, source, external_id) DO NOTHING
             """,
-            OWNER_ID, item.source, item.external_id, item.url,
+            user_id, item.source, item.external_id, item.url,
             item.title, item.price, item.year, item.mileage, item.city, item.filter_name,
         )
         return {"ok": True}
@@ -365,11 +394,12 @@ async def api_add_favorite(item: FavItem):
 
 
 @router.delete("/favorites/{source}/{external_id}")
-async def api_remove_favorite(source: str, external_id: str):
+async def api_remove_favorite(source: str, external_id: str,
+                              user_id: int = Depends(current_user)):
     pool = await get_pool()
     await pool.execute(
         "DELETE FROM favorites WHERE user_id=$1 AND source=$2 AND external_id=$3",
-        OWNER_ID, source, external_id
+        user_id, source, external_id
     )
     return {"ok": True}
 
@@ -384,22 +414,24 @@ class NotifSettings(BaseModel):
 
 
 @router.get("/settings")
-async def api_get_settings():
+async def api_get_settings(user_id: int = Depends(current_user)):
     from db.repository import get_notification_settings
-    return await get_notification_settings(OWNER_ID)
+    return await get_notification_settings(user_id)
 
 
 @router.post("/settings")
-async def api_save_settings(body: NotifSettings):
+async def api_save_settings(body: NotifSettings,
+                            user_id: int = Depends(current_user)):
     from db.repository import save_notification_settings
-    await save_notification_settings(OWNER_ID, body.dict())
+    await save_notification_settings(user_id, body.dict())
     return {"ok": True}
 
 
 # ── Price history ─────────────────────────────────────────────────────────────
 
 @router.get("/price_history/{source}/{external_id}")
-async def api_price_history(source: str, external_id: str):
+async def api_price_history(source: str, external_id: str,
+                            user_id: int = Depends(current_user)):
     from db.repository import get_price_history
     return await get_price_history(source, external_id)
 
@@ -407,7 +439,8 @@ async def api_price_history(source: str, external_id: str):
 # ── Seen ──────────────────────────────────────────────────────────────────────
 
 @router.post("/seen/clear")
-async def api_clear_seen():
+async def api_clear_seen(user_id: int = Depends(current_user)):
     pool = await get_pool()
-    await pool.execute("DELETE FROM seen_listings")
+    # Удаляем только свою историю: каталог лотов общий и нужен остальным
+    await pool.execute("DELETE FROM user_seen WHERE user_id = $1", user_id)
     return {"ok": True}

@@ -2,7 +2,7 @@ import datetime
 import logging
 import asyncpg
 from typing import Optional
-from config import DATABASE_URL
+from config import DATABASE_URL, OWNER_ID
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +56,47 @@ _MIGRATIONS = (
        )""",
     "CREATE INDEX IF NOT EXISTS idx_price_history_ext "
     "ON price_history (source, external_id)",
+    # ── Многопользовательский режим ───────────────────────────────────────────
+    """CREATE TABLE IF NOT EXISTS users (
+           user_id      BIGINT PRIMARY KEY,
+           username     TEXT,
+           first_name   TEXT,
+           is_active    BOOLEAN DEFAULT TRUE,
+           is_admin     BOOLEAN DEFAULT FALSE,
+           created_at   TIMESTAMPTZ DEFAULT NOW(),
+           last_seen_at TIMESTAMPTZ DEFAULT NOW()
+       )""",
+    """CREATE TABLE IF NOT EXISTS user_seen (
+           user_id     BIGINT NOT NULL,
+           source      TEXT   NOT NULL,
+           external_id TEXT   NOT NULL,
+           filter_name TEXT,
+           auction_notify_stage SMALLINT DEFAULT 0,
+           created_at  TIMESTAMPTZ DEFAULT NOW(),
+           PRIMARY KEY (user_id, source, external_id)
+       )""",
+    "CREATE INDEX IF NOT EXISTS idx_user_seen_created "
+    "ON user_seen (user_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_user_seen_lot "
+    "ON user_seen (source, external_id)",
+)
+
+# Разовый перенос данных при переходе на многопользовательский режим.
+# Всё, что бот уже присылал, закрепляем за владельцем — иначе после
+# обновления ему прилетит вся история заново.
+_BACKFILL = (
+    """INSERT INTO users (user_id, is_admin)
+       VALUES ($1, TRUE)
+       ON CONFLICT (user_id) DO UPDATE SET is_admin = TRUE""",
+    """INSERT INTO users (user_id)
+       SELECT DISTINCT user_id FROM filters
+       ON CONFLICT (user_id) DO NOTHING""",
+    """INSERT INTO user_seen (user_id, source, external_id,
+                              auction_notify_stage, created_at)
+       SELECT $1, s.source, s.external_id,
+              COALESCE(s.auction_notify_stage, 0), s.created_at
+       FROM seen_listings s
+       ON CONFLICT (user_id, source, external_id) DO NOTHING""",
 )
 
 
@@ -65,6 +106,15 @@ async def _apply_migrations(pool: asyncpg.Pool):
             await pool.execute(sql)
         except Exception as e:
             logger.warning(f"миграция не применена ({sql[:60]}…): {e}")
+
+    # Перенос истории владельцу — выполняется один раз, дальше вхолостую
+    for sql in _BACKFILL:
+        try:
+            # Не во всех запросах есть параметр, лишний asyncpg не примет
+            args = (OWNER_ID,) if "$1" in sql else ()
+            await pool.execute(sql, *args)
+        except Exception as e:
+            logger.warning(f"перенос данных не выполнен ({sql[:50]}…): {e}")
 
 
 async def get_pool() -> asyncpg.Pool:
@@ -80,6 +130,63 @@ async def close_pool():
     if _pool:
         await _pool.close()
         _pool = None
+
+
+# ── Пользователи ──────────────────────────────────────────────────────────────
+
+async def register_user(user_id: int, username: Optional[str] = None,
+                        first_name: Optional[str] = None) -> tuple[bool, bool]:
+    """
+    Завести или обновить пользователя.
+    Возвращает (доступ_разрешён, это_новый_пользователь).
+    """
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        """
+        INSERT INTO users (user_id, username, first_name, is_admin)
+        VALUES ($1, $2, $3, $1 = $4)
+        ON CONFLICT (user_id) DO UPDATE SET
+            username     = COALESCE(EXCLUDED.username, users.username),
+            first_name   = COALESCE(EXCLUDED.first_name, users.first_name),
+            last_seen_at = NOW()
+        RETURNING is_active, (xmax = 0) AS is_new
+        """,
+        user_id, username, first_name, OWNER_ID,
+    )
+    return (bool(row["is_active"]), bool(row["is_new"])) if row else (False, False)
+
+
+async def is_user_allowed(user_id: int) -> bool:
+    if user_id == OWNER_ID:
+        return True
+    pool = await get_pool()
+    return bool(await pool.fetchval(
+        "SELECT is_active FROM users WHERE user_id = $1", user_id))
+
+
+async def get_users() -> list[asyncpg.Record]:
+    pool = await get_pool()
+    return await pool.fetch(
+        """SELECT u.*,
+                  (SELECT COUNT(*) FROM filters f WHERE f.user_id = u.user_id) AS filters
+           FROM users u ORDER BY created_at"""
+    )
+
+
+async def set_user_active(user_id: int, active: bool) -> bool:
+    pool = await get_pool()
+    result = await pool.execute(
+        "UPDATE users SET is_active = $1 WHERE user_id = $2", active, user_id)
+    return result == "UPDATE 1"
+
+
+async def get_admin_ids() -> list[int]:
+    """Кому слать технические алерты. Владелец в списке всегда."""
+    pool = await get_pool()
+    rows = await pool.fetch("SELECT user_id FROM users WHERE is_admin IS TRUE")
+    ids = {r["user_id"] for r in rows}
+    ids.add(OWNER_ID)
+    return sorted(ids)
 
 
 # ── Filters ───────────────────────────────────────────────────────────────────
@@ -237,48 +344,67 @@ SEEN_COLUMNS = (
 )
 
 
-async def mark_seen(listing) -> bool:
-    """Записать объявление, если оно ещё не попадалось. True — новое."""
+async def mark_seen(listing, user_id: int) -> bool:
+    """
+    Записать объявление и отметить, что его показали этому пользователю.
+    True — для него это новое.
+
+    seen_listings — общий каталог лотов: один лот там лежит в одном экземпляре,
+    сколько бы пользователей его ни нашли. Факт показа хранится в user_seen,
+    поэтому лот, найденный одним пользователем, не пропадает у остальных.
+    """
     pool = await get_pool()
     source = listing.source
-    url    = listing.url
-    title  = listing.title
-    price  = listing.price
 
-    # Дедупликация по URL
-    if url:
-        exists = await pool.fetchval(
-            "SELECT 1 FROM seen_listings WHERE url = $1", url
-        )
-        if exists:
-            return False
-    # Дедупликация по заголовку + цене (для Авито с нестабильными URL)
-    if source == "avito" and title and price:
-        exists = await pool.fetchval(
-            "SELECT 1 FROM seen_listings WHERE source = $1 AND title = $2 AND price = $3",
-            source, title, price
-        )
-        if exists:
-            return False
-
+    # Каталог: добавляем лот, если его там ещё нет
     values      = [getattr(listing, col, None) for col in SEEN_COLUMNS]
     columns_sql = ", ".join(SEEN_COLUMNS)
     params_sql  = ", ".join(f"${i}" for i in range(1, len(SEEN_COLUMNS) + 1))
+    await pool.execute(
+        f"""INSERT INTO seen_listings ({columns_sql})
+            VALUES ({params_sql})
+            ON CONFLICT (source, external_id) DO NOTHING""",
+        *values,
+    )
+
+    # Авито меняет URL у одного и того же объявления, поэтому для него
+    # дополнительно проверяем совпадение по заголовку и цене
+    if source == "avito" and listing.title and listing.price:
+        twin = await pool.fetchval(
+            """SELECT 1 FROM user_seen us
+               JOIN seen_listings s
+                 ON s.source = us.source AND s.external_id = us.external_id
+               WHERE us.user_id = $1 AND s.source = 'avito'
+                 AND s.title = $2 AND s.price = $3
+                 AND s.external_id <> $4""",
+            user_id, listing.title, listing.price, listing.external_id,
+        )
+        if twin:
+            return False
 
     result = await pool.execute(
-        f"""
-        INSERT INTO seen_listings ({columns_sql})
-        VALUES ({params_sql})
-        ON CONFLICT (source, external_id) DO NOTHING
-        """,
-        *values,
+        """INSERT INTO user_seen (user_id, source, external_id, filter_name)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (user_id, source, external_id) DO NOTHING""",
+        user_id, source, listing.external_id, listing.filter_name,
     )
     return result == "INSERT 0 1"
 
 
-async def find_lots(query: str, limit: int = 10) -> list[asyncpg.Record]:
+# Лоты, которые присылали конкретному пользователю. Пишется в каждый
+# запрос, чтобы один пользователь не видел находки другого.
+USER_LOTS_JOIN = """
+    FROM user_seen us
+    JOIN seen_listings s
+      ON s.source = us.source AND s.external_id = us.external_id
+    WHERE us.user_id = $1 AND s.source = 'copart'
+"""
+
+
+async def find_lots(user_id: int, query: str, limit: int = 10) -> list[asyncpg.Record]:
     """
-    Поиск сохранённых лотов Copart по номеру лота, VIN или названию.
+    Поиск среди лотов Copart, которые присылали этому пользователю —
+    по номеру лота, VIN или названию.
     VIN у Copart частично замаскирован (2GNFLNEK9C6******), поэтому
     сравниваем по началу строки.
     """
@@ -287,15 +413,31 @@ async def find_lots(query: str, limit: int = 10) -> list[asyncpg.Record]:
         return []
     pool = await get_pool()
     return await pool.fetch(
-        """
-        SELECT * FROM seen_listings
-        WHERE source = 'copart'
-          AND (external_id = $1 OR vin LIKE $2 OR UPPER(title) LIKE $3)
-        ORDER BY created_at DESC
-        LIMIT $4
+        f"""
+        SELECT s.* {USER_LOTS_JOIN}
+          AND (s.external_id = $2 OR s.vin LIKE $3 OR UPPER(s.title) LIKE $4)
+        ORDER BY us.created_at DESC
+        LIMIT $5
         """,
-        q, q + "%", "%" + q + "%", limit,
+        user_id, q, q + "%", "%" + q + "%", limit,
     )
+
+
+async def get_user_lots(user_id: int, limit: int, offset: int,
+                        order: str = "us.created_at DESC",
+                        extra_where: str = "", extra_args: tuple = ()) -> tuple:
+    """Лоты пользователя постранично. Возвращает (строки, всего)."""
+    pool = await get_pool()
+    where = USER_LOTS_JOIN + extra_where
+    total = await pool.fetchval(
+        f"SELECT COUNT(*) {where}", user_id, *extra_args)
+    n = len(extra_args)
+    rows = await pool.fetch(
+        f"""SELECT s.* {where} ORDER BY {order}
+            LIMIT ${n + 2} OFFSET ${n + 3}""",
+        user_id, *extra_args, limit, offset,
+    )
+    return rows, total
 
 
 async def count_relists(vin: Optional[str], external_id: str) -> int:
@@ -314,19 +456,20 @@ async def count_relists(vin: Optional[str], external_id: str) -> int:
     ) or 0
 
 
-async def copart_price_stats(group_by: str = "model", limit: int = 15) -> list[asyncpg.Record]:
+async def copart_price_stats(user_id: int, group_by: str = "model",
+                             limit: int = 15) -> list[asyncpg.Record]:
     """
-    Разброс оценочных стоимостей по накопленным лотам.
+    Разброс оценочных стоимостей по лотам, которые видел этот пользователь.
     Цену продажи Copart не отдаёт, поэтому считаем по оценкам (`la`):
     сколько таких машин видели и в какую вилку они укладываются.
     """
     expr = {
         # Марка и модель из заголовка вида «2016 CHEVROLET CRUZE LT»
-        "model":  "SPLIT_PART(title, ' ', 2) || ' ' || SPLIT_PART(title, ' ', 3)",
-        "year":   "year::TEXT",
-        "damage": "COALESCE(damage_description, 'НЕ УКАЗАНО')",
-        "title_group": "COALESCE(title_group, 'НЕ УКАЗАН')",
-        "state":  "SPLIT_PART(city, ' - ', 1)",
+        "model":  "SPLIT_PART(s.title, ' ', 2) || ' ' || SPLIT_PART(s.title, ' ', 3)",
+        "year":   "s.year::TEXT",
+        "damage": "COALESCE(s.damage_description, 'НЕ УКАЗАНО')",
+        "title_group": "COALESCE(s.title_group, 'НЕ УКАЗАН')",
+        "state":  "SPLIT_PART(s.city, ' - ', 1)",
     }.get(group_by)
     if not expr:
         return []
@@ -335,20 +478,20 @@ async def copart_price_stats(group_by: str = "model", limit: int = 15) -> list[a
     return await pool.fetch(
         f"""
         SELECT {expr} AS bucket,
-               COUNT(*)                      AS cnt,
-               MIN(price)                    AS min_price,
-               ROUND(AVG(price))::INT        AS avg_price,
-               MAX(price)                    AS max_price,
-               ROUND(AVG(repair_cost))::INT  AS avg_repair,
-               ROUND(AVG(mileage))::INT      AS avg_mileage
-        FROM seen_listings
-        WHERE source = 'copart' AND price IS NOT NULL AND price > 0
+               COUNT(*)                        AS cnt,
+               MIN(s.price)                    AS min_price,
+               ROUND(AVG(s.price))::INT        AS avg_price,
+               MAX(s.price)                    AS max_price,
+               ROUND(AVG(s.repair_cost))::INT  AS avg_repair,
+               ROUND(AVG(s.mileage))::INT      AS avg_mileage
+        {USER_LOTS_JOIN}
+          AND s.price IS NOT NULL AND s.price > 0
         GROUP BY bucket
         HAVING COUNT(*) >= 2
         ORDER BY cnt DESC
-        LIMIT $1
+        LIMIT $2
         """,
-        limit,
+        user_id, limit,
     )
 
 
@@ -366,30 +509,33 @@ async def get_relist_history(vin: str) -> list[asyncpg.Record]:
 
 async def get_lots_to_remind(stage: int, within_hours: int) -> list[asyncpg.Record]:
     """
-    Лоты Copart, у которых торги начнутся в ближайшие within_hours
-    и которым ещё не отправляли напоминание этой стадии.
+    Лоты Copart, у которых торги вот-вот начнутся, вместе с получателем.
+    Напоминаем только тем, кому этот лот присылали, и только раз на стадию.
     """
     pool = await get_pool()
     return await pool.fetch(
         """
-        SELECT * FROM seen_listings
-        WHERE source = 'copart'
-          AND auction_date IS NOT NULL
-          AND auction_date > NOW()
-          AND auction_date <= NOW() + ($1 || ' hours')::INTERVAL
-          AND COALESCE(auction_notify_stage, 0) < $2
-        ORDER BY auction_date
+        SELECT us.user_id, s.*
+        FROM user_seen us
+        JOIN seen_listings s
+          ON s.source = us.source AND s.external_id = us.external_id
+        WHERE s.source = 'copart'
+          AND s.auction_date IS NOT NULL
+          AND s.auction_date > NOW()
+          AND s.auction_date <= NOW() + ($1 || ' hours')::INTERVAL
+          AND COALESCE(us.auction_notify_stage, 0) < $2
+        ORDER BY s.auction_date
         """,
         str(within_hours), stage,
     )
 
 
-async def set_notify_stage(external_id: str, stage: int):
+async def set_notify_stage(user_id: int, external_id: str, stage: int):
     pool = await get_pool()
     await pool.execute(
-        """UPDATE seen_listings SET auction_notify_stage = $1
-           WHERE source = 'copart' AND external_id = $2""",
-        stage, external_id,
+        """UPDATE user_seen SET auction_notify_stage = $1
+           WHERE user_id = $2 AND source = 'copart' AND external_id = $3""",
+        stage, user_id, external_id,
     )
 
 
@@ -402,7 +548,7 @@ async def cleanup_old_listings(days: int = 30) -> dict:
     listings = await pool.execute(
         f"DELETE FROM seen_listings WHERE created_at < NOW() - INTERVAL '{days} days'"
     )
-    # Осиротевшие записи истории — объявления уже нет
+    # Осиротевшие записи — самого объявления уже нет
     orphans = await pool.execute(
         """DELETE FROM price_history ph
            WHERE NOT EXISTS (
@@ -410,7 +556,15 @@ async def cleanup_old_listings(days: int = 30) -> dict:
                WHERE s.source = ph.source AND s.external_id = ph.external_id
            )"""
     )
-    return {"listings": listings, "price_history": orphans}
+    user_orphans = await pool.execute(
+        """DELETE FROM user_seen us
+           WHERE NOT EXISTS (
+               SELECT 1 FROM seen_listings s
+               WHERE s.source = us.source AND s.external_id = us.external_id
+           )"""
+    )
+    return {"listings": listings, "price_history": orphans,
+            "user_seen": user_orphans}
 
 
 # ── Здоровье источников ───────────────────────────────────────────────────────

@@ -1,3 +1,15 @@
+-- Пользователи бота. is_admin — тот, кому идут технические алерты
+-- (пустая выдача источника и прочее), обычно владелец из OWNER_ID.
+CREATE TABLE IF NOT EXISTS users (
+    user_id     BIGINT PRIMARY KEY,
+    username    TEXT,
+    first_name  TEXT,
+    is_active   BOOLEAN DEFAULT TRUE,
+    is_admin    BOOLEAN DEFAULT FALSE,
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    last_seen_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS filters (
     id           SERIAL PRIMARY KEY,
     user_id      BIGINT NOT NULL,
@@ -140,6 +152,28 @@ CREATE INDEX IF NOT EXISTS idx_seen_listings_auction_date
 -- Для выборки лотов, которым пора напомнить о торгах
 CREATE INDEX IF NOT EXISTS idx_seen_listings_auction_notify
     ON seen_listings (source, auction_date, auction_notify_stage);
+
+-- Кому из пользователей какой лот уже отправляли.
+--
+-- Раньше признак «виденное» жил прямо в seen_listings, и это ломало
+-- многопользовательский режим: фильтр одного пользователя помечал лот
+-- виденным для всех, и остальные его не получали. Теперь seen_listings —
+-- общий каталог лотов, а факт отправки хранится здесь, отдельно по каждому.
+CREATE TABLE IF NOT EXISTS user_seen (
+    user_id     BIGINT NOT NULL,
+    source      TEXT   NOT NULL,
+    external_id TEXT   NOT NULL,
+    filter_name TEXT,
+    -- 0 — не напоминали, 1 — отправлено за сутки, 2 — отправлено за час
+    auction_notify_stage SMALLINT DEFAULT 0,
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (user_id, source, external_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_seen_created
+    ON user_seen (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_seen_lot
+    ON user_seen (source, external_id);
 
 -- Здоровье источников: сколько обходов подряд площадка вернула пусто.
 -- Нужно, чтобы смена формата у площадки не проходила незамеченной.

@@ -26,6 +26,11 @@ from db.repository import (
     get_pool,
     add_favorite_from_seen,
     is_favorite,
+    register_user,
+    is_user_allowed,
+    get_users,
+    set_user_active,
+    get_admin_ids,
     find_lots,
     get_relist_history,
     copart_price_stats,
@@ -99,8 +104,15 @@ COPART_STEPS = 12
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _is_owner(uid: int) -> bool:
-    return uid == OWNER_ID
+async def _is_owner(uid: int) -> bool:
+    """
+    Есть ли у пользователя доступ к боту.
+
+    Раньше здесь было жёсткое сравнение с OWNER_ID, и всё, что делал бот,
+    принадлежало одному аккаунту. Теперь пользователи заводятся в таблице
+    users, а данные у каждого свои.
+    """
+    return await is_user_allowed(uid)
 
 
 def _parse_int_or_none(text: str):
@@ -352,7 +364,7 @@ def _ru_menu_kb() -> InlineKeyboardMarkup:
 
 @router.callback_query(F.data == "ru_menu")
 async def cb_ru_menu(call: CallbackQuery):
-    if not _is_owner(call.from_user.id):
+    if not await _is_owner(call.from_user.id):
         await call.answer("⛔", show_alert=True)
         return
     try:
@@ -820,13 +832,81 @@ def _step(n: int, total: int, title: str, hint: str, skip: bool = True) -> str:
     )
 
 
+# ── Управление пользователями (для администратора) ────────────────────────────
+
+@router.message(Command("users"))
+async def cmd_users(message: Message):
+    if message.from_user.id not in await get_admin_ids():
+        return
+
+    users = await get_users()
+    if not users:
+        await message.answer("Пользователей пока нет.")
+        return
+
+    lines = [f"👥 <b>Пользователи</b>  <i>({len(users)})</i>",
+             f"<code>{'─' * 26}</code>"]
+    rows = []
+    for u in users:
+        mark = "✅" if u["is_active"] else "⛔"
+        role = " 👑" if u["is_admin"] else ""
+        who = f"@{u['username']}" if u["username"] else (u["first_name"] or "—")
+        lines.append(f"{mark} {who}{role}  ·  <code>{u['user_id']}</code>  "
+                     f"·  фильтров: {u['filters']}")
+        if not u["is_admin"]:
+            action = "off" if u["is_active"] else "on"
+            label = "⛔ Отключить" if u["is_active"] else "✅ Включить"
+            rows.append([InlineKeyboardButton(
+                text=f"{label} {who}",
+                callback_data=f"user_{action}:{u['user_id']}")])
+
+    rows.append([InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")])
+    await message.answer("\n".join(lines), parse_mode="HTML",
+                         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+@router.callback_query(F.data.startswith("user_on:") | F.data.startswith("user_off:"))
+async def cb_user_toggle(call: CallbackQuery):
+    if call.from_user.id not in await get_admin_ids():
+        await call.answer("⛔", show_alert=True)
+        return
+    action, uid = call.data.split(":")
+    active = action == "user_on"
+    await set_user_active(int(uid), active)
+    await call.answer("✅ Включён" if active else "⛔ Отключён")
+    await cmd_users(call.message.model_copy(update={"from_user": call.from_user}))
+
+
 # ── Команды ───────────────────────────────────────────────────────────────────
 
 @router.message(Command("start"))
 async def cmd_start(message: Message):
-    if not _is_owner(message.from_user.id):
-        await message.answer("⛔ Доступ запрещён.")
+    user = message.from_user
+    allowed, is_new = await register_user(user.id, user.username, user.first_name)
+
+    if not allowed:
+        await message.answer(
+            "⛔ <b>Доступ приостановлен.</b>\n\n"
+            "Обратись к администратору бота.",
+            parse_mode="HTML",
+        )
         return
+
+    if is_new and user.id != OWNER_ID:
+        # Владельцу полезно знать, кто подключился
+        who = f"@{user.username}" if user.username else (user.first_name or "без имени")
+        for admin in await get_admin_ids():
+            try:
+                await message.bot.send_message(
+                    admin,
+                    f"👤 <b>Новый пользователь</b>\n{who} · <code>{user.id}</code>\n\n"
+                    f"У него свои фильтры и уведомления. "
+                    f"Отключить — /users",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+
     await message.answer(
         "👋 <b>Привет! Это Car Monitor Bot</b>\n\n"
         "🟡 <b>Основной источник — аукцион Copart.</b>\n"
@@ -854,7 +934,7 @@ async def cmd_start(message: Message):
 
 @router.message(Command("menu"))
 async def cmd_menu(message: Message):
-    if not _is_owner(message.from_user.id):
+    if not await _is_owner(message.from_user.id):
         return
     await message.answer("🏠 <b>Главное меню</b>", parse_mode="HTML", reply_markup=_main_menu_kb())
 
@@ -870,7 +950,7 @@ async def cb_main_menu(call: CallbackQuery):
 
 @router.message(Command("help"))
 async def cmd_help(message: Message):
-    if not _is_owner(message.from_user.id):
+    if not await _is_owner(message.from_user.id):
         return
     await message.answer(
         "<b>📖 Как пользоваться ботом</b>\n"
@@ -915,18 +995,26 @@ async def cmd_help(message: Message):
     )
 
 
-async def _status_text() -> str:
+async def _status_text(user_id: int) -> str:
+    """Статистика конкретного пользователя, а не всей базы."""
     pool = await get_pool()
-    total_filters  = await pool.fetchval("SELECT COUNT(*) FROM filters WHERE user_id=$1", OWNER_ID)
-    active_filters = await pool.fetchval("SELECT COUNT(*) FROM filters WHERE user_id=$1 AND is_active=TRUE", OWNER_ID)
-    seen_total = await pool.fetchval("SELECT COUNT(*) FROM seen_listings")
-    seen_24h   = await pool.fetchval("SELECT COUNT(*) FROM seen_listings WHERE created_at > NOW() - INTERVAL '24 hours'")
-    seen_1h    = await pool.fetchval("SELECT COUNT(*) FROM seen_listings WHERE created_at > NOW() - INTERVAL '1 hour'")
+    total_filters  = await pool.fetchval(
+        "SELECT COUNT(*) FROM filters WHERE user_id=$1", user_id)
+    active_filters = await pool.fetchval(
+        "SELECT COUNT(*) FROM filters WHERE user_id=$1 AND is_active=TRUE", user_id)
+    seen_total = await pool.fetchval(
+        "SELECT COUNT(*) FROM user_seen WHERE user_id=$1", user_id)
+    seen_24h = await pool.fetchval(
+        "SELECT COUNT(*) FROM user_seen WHERE user_id=$1 "
+        "AND created_at > NOW() - INTERVAL '24 hours'", user_id)
+    seen_1h = await pool.fetchval(
+        "SELECT COUNT(*) FROM user_seen WHERE user_id=$1 "
+        "AND created_at > NOW() - INTERVAL '1 hour'", user_id)
     return (
         "<b>📊 Статистика</b>\n\n"
         f"<b>Фильтры</b>\n"
         f"  Всего: {total_filters}  ·  Активных: {active_filters}\n\n"
-        f"<b>Просмотрено объявлений</b>\n"
+        f"<b>Прислано объявлений</b>\n"
         f"  За час:    {seen_1h}\n"
         f"  За сутки:  {seen_24h}\n"
         f"  Всего:     {seen_total}"
@@ -935,9 +1023,9 @@ async def _status_text() -> str:
 
 @router.message(Command("status"))
 async def cmd_status(message: Message):
-    if not _is_owner(message.from_user.id):
+    if not await _is_owner(message.from_user.id):
         return
-    text = await _status_text()
+    text = await _status_text(message.from_user.id)
     await message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="🔄 Обновить", callback_data="show_status"),
         InlineKeyboardButton(text="🏠 Меню",     callback_data="main_menu"),
@@ -946,7 +1034,7 @@ async def cmd_status(message: Message):
 
 @router.callback_query(F.data == "show_status")
 async def cb_show_status(call: CallbackQuery):
-    text = await _status_text()
+    text = await _status_text(call.from_user.id)
     try:
         await call.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="🔄 Обновить", callback_data="show_status"),
@@ -961,9 +1049,9 @@ async def cb_show_status(call: CallbackQuery):
 
 @router.message(Command("filters"))
 async def cmd_filters(message: Message):
-    if not _is_owner(message.from_user.id):
+    if not await _is_owner(message.from_user.id):
         return
-    filters = await get_active_filters(OWNER_ID)
+    filters = await get_active_filters(message.from_user.id)
     if not filters:
         await message.answer(
             "📋 Фильтров пока нет. Создай первый:",
@@ -999,7 +1087,7 @@ EMPTY_COPART_KB = InlineKeyboardMarkup(inline_keyboard=[
 async def cb_filters_list(call: CallbackQuery):
     """Основной список — фильтры Copart."""
     page    = int(call.data.split(":")[1])
-    filters = await get_active_filters(OWNER_ID)
+    filters = await get_active_filters(call.from_user.id)
     copart, ru = split_by_kind(filters)
 
     if not copart:
@@ -1023,7 +1111,7 @@ async def cb_filters_list(call: CallbackQuery):
 async def cb_ru_filters(call: CallbackQuery):
     """Список фильтров по российским площадкам — за отдельной кнопкой."""
     page    = int(call.data.split(":")[1])
-    filters = await get_active_filters(OWNER_ID)
+    filters = await get_active_filters(call.from_user.id)
     _, ru = split_by_kind(filters)
 
     if not ru:
@@ -1055,7 +1143,7 @@ async def cb_noop(call: CallbackQuery):
 @router.callback_query(F.data.startswith("filter_info:"))
 async def cb_filter_info(call: CallbackQuery):
     filter_id = int(call.data.split(":")[1])
-    f = await get_filter_by_id(filter_id, OWNER_ID)
+    f = await get_filter_by_id(filter_id, call.from_user.id)
     if not f:
         await call.answer("Фильтр не найден", show_alert=True)
         return
@@ -1072,9 +1160,9 @@ async def cb_filter_info(call: CallbackQuery):
 @router.callback_query(F.data.startswith("filter_pause:"))
 async def cb_filter_pause(call: CallbackQuery):
     filter_id = int(call.data.split(":")[1])
-    await toggle_filter(filter_id, OWNER_ID, active=False)
+    await toggle_filter(filter_id, call.from_user.id, active=False)
     await call.answer("⏸ Приостановлен")
-    f = await get_filter_by_id(filter_id, OWNER_ID)
+    f = await get_filter_by_id(filter_id, call.from_user.id)
     if f:
         await call.message.edit_text(_render_filter(f), parse_mode="HTML",
                                      reply_markup=_filter_detail_kb(filter_id, f["is_active"], _is_copart_filter(f)))
@@ -1083,9 +1171,9 @@ async def cb_filter_pause(call: CallbackQuery):
 @router.callback_query(F.data.startswith("filter_resume:"))
 async def cb_filter_resume(call: CallbackQuery):
     filter_id = int(call.data.split(":")[1])
-    await toggle_filter(filter_id, OWNER_ID, active=True)
+    await toggle_filter(filter_id, call.from_user.id, active=True)
     await call.answer("✅ Активен")
-    f = await get_filter_by_id(filter_id, OWNER_ID)
+    f = await get_filter_by_id(filter_id, call.from_user.id)
     if f:
         await call.message.edit_text(_render_filter(f), parse_mode="HTML",
                                      reply_markup=_filter_detail_kb(filter_id, f["is_active"], _is_copart_filter(f)))
@@ -1096,7 +1184,7 @@ async def cb_filter_resume(call: CallbackQuery):
 @router.callback_query(F.data.startswith("filter_delete:"))
 async def cb_filter_delete(call: CallbackQuery):
     filter_id = int(call.data.split(":")[1])
-    f = await get_filter_by_id(filter_id, OWNER_ID)
+    f = await get_filter_by_id(filter_id, call.from_user.id)
     name = f["name"] if f else "фильтр"
     await call.message.edit_text(
         f"🗑 Удалить <b>«{name}»</b>?\n\n<i>Это действие нельзя отменить.</i>",
@@ -1109,9 +1197,9 @@ async def cb_filter_delete(call: CallbackQuery):
 @router.callback_query(F.data.startswith("filter_delete_confirm:"))
 async def cb_filter_delete_confirm(call: CallbackQuery):
     filter_id = int(call.data.split(":")[1])
-    deleted   = await delete_filter(filter_id, OWNER_ID)
+    deleted   = await delete_filter(filter_id, call.from_user.id)
     await call.answer("🗑 Удалён" if deleted else "Не найден", show_alert=True)
-    filters = await get_active_filters(OWNER_ID)
+    filters = await get_active_filters(call.from_user.id)
     if filters:
         await call.message.edit_text(
             f"<b>📋 Фильтры</b>  <i>({len(filters)} шт.)</i>",
@@ -1133,7 +1221,7 @@ async def cb_filter_delete_confirm(call: CallbackQuery):
 @router.callback_query(F.data.startswith("filter_edit:"))
 async def cb_filter_edit(call: CallbackQuery):
     filter_id = int(call.data.split(":")[1])
-    f = await get_filter_by_id(filter_id, OWNER_ID)
+    f = await get_filter_by_id(filter_id, call.from_user.id)
     if not f:
         await call.answer("Фильтр не найден", show_alert=True)
         return
@@ -1151,7 +1239,7 @@ async def cb_filter_edit(call: CallbackQuery):
 async def cb_edit_field(call: CallbackQuery, state: FSMContext):
     _, filter_id_str, field = call.data.split(":", 2)
     filter_id = int(filter_id_str)
-    f = await get_filter_by_id(filter_id, OWNER_ID)
+    f = await get_filter_by_id(filter_id, call.from_user.id)
     if not f:
         await call.answer("Фильтр не найден", show_alert=True)
         return
@@ -1295,14 +1383,14 @@ async def cb_edit_val(call: CallbackQuery, state: FSMContext):
     elif field == "brand":
         value = val_raw if val_raw != "-" else None
         # Сбрасываем модель при смене марки
-        await update_filter_field(filter_id, OWNER_ID, "model", None)
+        await update_filter_field(filter_id, call.from_user.id, "model", None)
     else:
         value = val_raw if val_raw != "-" else None
 
-    await update_filter_field(filter_id, OWNER_ID, field, value)
+    await update_filter_field(filter_id, call.from_user.id, field, value)
     await state.clear()
 
-    f = await get_filter_by_id(filter_id, OWNER_ID)
+    f = await get_filter_by_id(filter_id, call.from_user.id)
     await call.message.edit_text(
         _render_filter(f),
         parse_mode="HTML",
@@ -1337,10 +1425,10 @@ async def fsm_edit_text(message: Message, state: FSMContext):
     else:
         value = raw
 
-    await update_filter_field(filter_id, OWNER_ID, field, value)
+    await update_filter_field(filter_id, message.from_user.id, field, value)
     await state.clear()
 
-    f = await get_filter_by_id(filter_id, OWNER_ID)
+    f = await get_filter_by_id(filter_id, message.from_user.id)
     await message.answer(
         _render_filter(f),
         parse_mode="HTML",
@@ -1408,10 +1496,10 @@ async def cb_cp_done(call: CallbackQuery, state: FSMContext):
     filter_id = data["edit_filter_id"]
     selected  = list(data.get("cp_selected", []))
 
-    await update_filter_field(filter_id, OWNER_ID, field, selected or None)
+    await update_filter_field(filter_id, call.from_user.id, field, selected or None)
     await state.clear()
 
-    f = await get_filter_by_id(filter_id, OWNER_ID)
+    f = await get_filter_by_id(filter_id, call.from_user.id)
     await call.message.edit_text(
         _render_filter(f),
         parse_mode="HTML",
@@ -1429,16 +1517,16 @@ async def cb_edit_brand(call: CallbackQuery, state: FSMContext):
     filter_id = data["edit_filter_id"]
 
     if brand == "-":
-        await update_filter_field(filter_id, OWNER_ID, "brand", None)
-        await update_filter_field(filter_id, OWNER_ID, "model", None)
+        await update_filter_field(filter_id, call.from_user.id, "brand", None)
+        await update_filter_field(filter_id, call.from_user.id, "model", None)
         await state.clear()
-        f = await get_filter_by_id(filter_id, OWNER_ID)
+        f = await get_filter_by_id(filter_id, call.from_user.id)
         await call.message.edit_text(_render_filter(f), parse_mode="HTML",
                                      reply_markup=_filter_detail_kb(filter_id, f["is_active"], _is_copart_filter(f)))
         await call.answer("✅ Сохранено")
     else:
-        await update_filter_field(filter_id, OWNER_ID, "brand", brand)
-        await update_filter_field(filter_id, OWNER_ID, "model", None)
+        await update_filter_field(filter_id, call.from_user.id, "brand", brand)
+        await update_filter_field(filter_id, call.from_user.id, "model", None)
         await state.update_data(edit_field="model")
         await call.message.edit_text(
             f"🔠 Выбери модель {brand.title()}:",
@@ -1453,9 +1541,9 @@ async def cb_edit_model(call: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     filter_id = data["edit_filter_id"]
     value = None if model == "-" else model
-    await update_filter_field(filter_id, OWNER_ID, "model", value)
+    await update_filter_field(filter_id, call.from_user.id, "model", value)
     await state.clear()
-    f = await get_filter_by_id(filter_id, OWNER_ID)
+    f = await get_filter_by_id(filter_id, call.from_user.id)
     await call.message.edit_text(_render_filter(f), parse_mode="HTML",
                                  reply_markup=_filter_detail_kb(filter_id, f["is_active"], _is_copart_filter(f)))
     await call.answer("✅ Сохранено")
@@ -1509,9 +1597,9 @@ async def cb_edit_city_done(call: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     filter_id = data["edit_filter_id"]
     selected  = data.get("edit_cities", [])
-    await update_filter_field(filter_id, OWNER_ID, "cities", selected if selected else None)
+    await update_filter_field(filter_id, call.from_user.id, "cities", selected if selected else None)
     await state.clear()
-    f = await get_filter_by_id(filter_id, OWNER_ID)
+    f = await get_filter_by_id(filter_id, call.from_user.id)
     await call.message.edit_text(_render_filter(f), parse_mode="HTML",
                                  reply_markup=_filter_detail_kb(filter_id, f["is_active"], _is_copart_filter(f)))
     await call.answer("✅ Города сохранены")
@@ -1522,7 +1610,8 @@ async def cb_edit_city_done(call: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "filter_add")
 async def cb_filter_add(call: CallbackQuery, state: FSMContext):
     await state.set_state(FilterForm.name)
-    await state.update_data(fsm_cities=[])
+    # Владелец фиксируется в начале — финализатор возьмёт его отсюда
+    await state.update_data(fsm_cities=[], user_id=call.from_user.id)
     await call.message.answer(
         _step(1, 13, "Шаг 1 — Название фильтра",
               "Как назовёшь этот поиск?\n"
@@ -1861,7 +1950,7 @@ async def _finish_filter(msg, state: FSMContext, sources: list, from_call: bool)
     cities = data.get("fsm_cities") or []
 
     f = await create_filter(
-        user_id=OWNER_ID,
+        user_id=data["user_id"],
         name=data["name"],
         # Российский мастер выбирает одну марку и модель — списки тут не нужны
         brand=data.get("brand"),
@@ -1965,10 +2054,11 @@ def _cp_multi_kb(options: list[tuple[str, str]], selected: list[str],
 
 @router.callback_query(F.data == "copart_add")
 async def cb_copart_add(call: CallbackQuery, state: FSMContext):
-    if not _is_owner(call.from_user.id):
+    if not await _is_owner(call.from_user.id):
         await call.answer("⛔", show_alert=True)
         return
     await state.clear()
+    await state.update_data(user_id=call.from_user.id)
     await state.set_state(CopartForm.name)
     await call.message.edit_text(
         _cp_step(1, "Шаг 1 — Название",
@@ -2471,7 +2561,8 @@ async def cpw_advance(call: CallbackQuery, state: FSMContext):
 def _filter_from_wizard(data: dict, opt: str = "none") -> SearchFilter:
     """Собрать SearchFilter из состояния мастера — для предпросмотра."""
     return SearchFilter(
-        id=0, user_id=OWNER_ID, name=data.get("name") or "проверка", kind="copart",
+        id=0, user_id=data.get("user_id") or OWNER_ID,
+        name=data.get("name") or "проверка", kind="copart",
         brands=data.get("brands") or [], models=data.get("models") or [],
         brand=(data.get("brands") or [None])[0],
         model=(data.get("models") or [None])[0],
@@ -2569,7 +2660,7 @@ async def cpw_finish(call: CallbackQuery, state: FSMContext):
     await state.clear()
 
     f = await create_filter(
-        user_id=OWNER_ID,
+        user_id=call.from_user.id,
         name=data["name"],
         kind="copart",
         brand=(data.get("brands") or [None])[0],
@@ -2611,12 +2702,12 @@ async def cpw_finish(call: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("filter_copy:"))
 async def cb_filter_copy(call: CallbackQuery):
     """Создать копию фильтра — «то же самое, но другая марка»."""
-    if not _is_owner(call.from_user.id):
+    if not await _is_owner(call.from_user.id):
         await call.answer("⛔", show_alert=True)
         return
 
     filter_id = int(call.data.split(":")[1])
-    copy = await duplicate_filter(filter_id, OWNER_ID)
+    copy = await duplicate_filter(filter_id, call.from_user.id)
     if not copy:
         await call.answer("Не удалось скопировать", show_alert=True)
         return
@@ -2637,12 +2728,12 @@ async def cb_filter_copy(call: CallbackQuery):
 @router.callback_query(F.data.startswith("filter_check:"))
 async def cb_filter_check(call: CallbackQuery):
     """Проверить сохранённый фильтр Copart — сколько лотов он ловит сейчас."""
-    if not _is_owner(call.from_user.id):
+    if not await _is_owner(call.from_user.id):
         await call.answer("⛔", show_alert=True)
         return
 
     filter_id = int(call.data.split(":")[1])
-    record = await get_filter_by_id(filter_id, OWNER_ID)
+    record = await get_filter_by_id(filter_id, call.from_user.id)
     if not record:
         await call.answer("Фильтр не найден", show_alert=True)
         return
@@ -2672,7 +2763,7 @@ async def cb_filter_check(call: CallbackQuery):
 
 @router.callback_query(F.data.startswith("cost:"))
 async def cb_cost(call: CallbackQuery):
-    if not _is_owner(call.from_user.id):
+    if not await _is_owner(call.from_user.id):
         await call.answer("⛔", show_alert=True)
         return
 
@@ -2739,7 +2830,7 @@ def _stats_kb(active: str) -> InlineKeyboardMarkup:
 
 @router.callback_query(F.data.startswith("copart_stats"))
 async def cb_copart_stats(call: CallbackQuery):
-    if not _is_owner(call.from_user.id):
+    if not await _is_owner(call.from_user.id):
         await call.answer("⛔", show_alert=True)
         return
 
@@ -2747,7 +2838,7 @@ async def cb_copart_stats(call: CallbackQuery):
     group = parts[1] if len(parts) > 1 else "model"
     label = dict(STATS_GROUPS).get(group, group)
 
-    rows = await copart_price_stats(group)
+    rows = await copart_price_stats(call.from_user.id, group)
     if not rows:
         await call.message.edit_text(
             "📊 <b>Оценки Copart</b>\n\n"
@@ -2795,7 +2886,7 @@ class LotSearch(StatesGroup):
 
 @router.callback_query(F.data == "copart_search")
 async def cb_copart_search(call: CallbackQuery, state: FSMContext):
-    if not _is_owner(call.from_user.id):
+    if not await _is_owner(call.from_user.id):
         await call.answer("⛔", show_alert=True)
         return
     await state.set_state(LotSearch.query)
@@ -2817,12 +2908,12 @@ async def cb_copart_search(call: CallbackQuery, state: FSMContext):
 
 @router.message(StateFilter(LotSearch.query))
 async def cb_lot_search_run(message: Message, state: FSMContext):
-    if not _is_owner(message.from_user.id):
+    if not await _is_owner(message.from_user.id):
         return
     await state.clear()
     query = message.text.strip()
 
-    rows = await find_lots(query)
+    rows = await find_lots(message.from_user.id, query)
     if not rows:
         await message.answer(
             f"🔍 По запросу «{query}» ничего не нашлось.\n\n"
@@ -2867,7 +2958,7 @@ async def cb_lot_search_run(message: Message, state: FSMContext):
 
 @router.inline_query()
 async def inline_lot_search(query: InlineQuery):
-    if query.from_user.id != OWNER_ID:
+    if query.from_user.id != query.from_user.id:
         await query.answer([], cache_time=5, is_personal=True)
         return
 
@@ -2881,7 +2972,7 @@ async def inline_lot_search(query: InlineQuery):
         return
 
     try:
-        rows = await find_lots(text, limit=20)
+        rows = await find_lots(query.from_user.id, text, limit=20)
     except Exception as e:
         logger.error(f"инлайн-поиск «{text}»: {e}")
         await query.answer([], cache_time=5, is_personal=True)
@@ -3018,7 +3109,7 @@ COPART_HELP = (
 
 @router.callback_query(F.data == "copart_help")
 async def cb_copart_help(call: CallbackQuery):
-    if not _is_owner(call.from_user.id):
+    if not await _is_owner(call.from_user.id):
         await call.answer("⛔", show_alert=True)
         return
     try:
@@ -3043,7 +3134,7 @@ async def cb_copart_help(call: CallbackQuery):
 
 @router.callback_query(F.data.startswith("copart_lots:"))
 async def cb_copart_lots(call: CallbackQuery):
-    if not _is_owner(call.from_user.id):
+    if not await _is_owner(call.from_user.id):
         await call.answer("⛔", show_alert=True)
         return
 
@@ -3130,7 +3221,7 @@ async def cb_fav_add(call: CallbackQuery):
     source, external_id = parts[1], parts[2]
 
     try:
-        added = await add_favorite_from_seen(OWNER_ID, source, external_id)
+        added = await add_favorite_from_seen(call.from_user.id, source, external_id)
     except Exception as e:
         logger.error(f"избранное: ошибка сохранения {source}/{external_id}: {e}")
         await call.answer("⚠️ Не удалось сохранить", show_alert=True)
@@ -3138,7 +3229,7 @@ async def cb_fav_add(call: CallbackQuery):
 
     if added:
         await call.answer("⭐️ Добавлено в избранное")
-    elif await is_favorite(OWNER_ID, source, external_id):
+    elif await is_favorite(call.from_user.id, source, external_id):
         await call.answer("⭐️ Уже в избранном")
     else:
         # Строки в seen_listings нет — например, объявление успели вычистить

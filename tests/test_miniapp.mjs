@@ -27,11 +27,15 @@ const documentStub = {
   body: {classList: {add: noop, remove: noop}},
   addEventListener: noop,
 }
+const noFetch = () => Promise.reject(new Error('сеть в тестах не используется'))
 const sandbox = {
+  // Скрипт оборачивает window.fetch, чтобы подставлять initData Telegram —
+  // значит, заглушке нужен и window.fetch, а не только глобальный
   document: documentStub,
-  window: {location: {origin: 'https://example.com'}, Telegram: undefined},
+  window: {location: {origin: 'https://example.com'}, Telegram: undefined,
+           fetch: noFetch},
   localStorage: {getItem: () => null, setItem: noop},
-  fetch: () => Promise.reject(new Error('сеть в тестах не используется')),
+  fetch: noFetch,
   setTimeout: noop, setInterval: noop, clearTimeout: noop,
   requestAnimationFrame: noop, performance: {now: () => 0},
   navigator: {}, console,

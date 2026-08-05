@@ -662,6 +662,19 @@ const BASE = (window.location.origin && window.location.origin !== 'null')
   ? window.location.origin
   : 'https://car-monitor-bot-oov7.onrender.com';
 const tg = window.Telegram?.WebApp;
+
+// Telegram подписывает initData ключом от токена бота. Сервер проверяет
+// подпись и по ней понимает, чьи данные отдавать — без этого API вернёт 401.
+const INIT_DATA = tg?.initData || '';
+
+// Все запросы к API идут через эту обёртку, чтобы заголовок не забыть
+const _fetch = window.fetch.bind(window);
+window.fetch = (url, opts = {}) => {
+  if (typeof url === 'string' && url.includes('/api/')) {
+    opts.headers = {...(opts.headers || {}), 'X-Telegram-Init-Data': INIT_DATA};
+  }
+  return _fetch(url, opts);
+};
 if(tg){
   tg.ready();
   tg.expand();

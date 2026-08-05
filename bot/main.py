@@ -58,40 +58,14 @@ def create_app() -> FastAPI:
     # Раздаём Mini App — данные встроены прямо в HTML (SSR)
     from fastapi.responses import HTMLResponse
     from pathlib import Path
-    import json as _json
 
     @app.get("/miniapp", response_class=HTMLResponse)
     async def serve_miniapp():
-        html = Path("miniapp/index.html").read_text(encoding="utf-8")
-
-        # Загружаем данные на сервере и встраиваем в HTML
-        try:
-            pool = await get_pool()
-            seen_total     = await pool.fetchval("SELECT COUNT(*) FROM seen_listings")
-            seen_24h       = await pool.fetchval("SELECT COUNT(*) FROM seen_listings WHERE created_at > NOW() - INTERVAL '24 hours'")
-            seen_1h        = await pool.fetchval("SELECT COUNT(*) FROM seen_listings WHERE created_at > NOW() - INTERVAL '1 hour'")
-            active_filters = await pool.fetchval("SELECT COUNT(*) FROM filters WHERE is_active=TRUE")
-            recent = await pool.fetch("SELECT source, external_id, url, title, price, city, created_at FROM seen_listings ORDER BY created_at DESC LIMIT 20")
-            top_deals_rows = await pool.fetch("SELECT source, external_id, url, title, price, city, created_at FROM seen_listings WHERE created_at > NOW() - INTERVAL '24 hours' AND price IS NOT NULL AND price > 0 ORDER BY price ASC LIMIT 10")
-            hourly = await pool.fetch("SELECT DATE_TRUNC('hour', created_at) as hour, COUNT(*) as cnt FROM seen_listings WHERE created_at > NOW() - INTERVAL '24 hours' GROUP BY hour ORDER BY hour")
-            daily  = await pool.fetch("SELECT DATE_TRUNC('day', created_at) as day, COUNT(*) as cnt FROM seen_listings WHERE created_at > NOW() - INTERVAL '7 days' GROUP BY day ORDER BY day")
-
-            ssr_data = {
-                "seen_total": seen_total, "seen_24h": seen_24h,
-                "seen_1h": seen_1h, "active_filters": active_filters,
-                "recent_listings": [{"source":r["source"],"external_id":r["external_id"],"url":r["url"],"title":r["title"],"price":r["price"],"city":r["city"],"created_at":str(r["created_at"])} for r in recent],
-            "top_deals": [{"source":r["source"],"external_id":r["external_id"],"url":r["url"],"title":r["title"],"price":r["price"],"city":r["city"],"created_at":str(r["created_at"])} for r in top_deals_rows],
-                "hourly": [{"hour":str(r["hour"]),"cnt":r["cnt"]} for r in hourly],
-                "daily":  [{"day":str(r["day"]),"cnt":r["cnt"]}  for r in daily],
-            }
-        except Exception as e:
-            ssr_data = {"seen_total":0,"seen_24h":0,"seen_1h":0,"active_filters":0,"recent_listings":[],"hourly":[],"daily":[]}
-
-        # Встраиваем данные — ensure_ascii=True чтобы избежать проблем со спецсимволами
-        ssr_json = _json.dumps(ssr_data, ensure_ascii=True)
-        ssr_script = f"<script>window.__SSR__ = {ssr_json};</script>"
-        html = html.replace("</head>", ssr_script + "</head>", 1)
-        return HTMLResponse(content=html)
+        # Данные больше не встраиваются в страницу: при нескольких
+        # пользователях на этапе отдачи HTML ещё неизвестно, кто её открыл —
+        # это выяснится из подписанной initData в первом же запросе к API.
+        return HTMLResponse(
+            content=Path("miniapp/index.html").read_text(encoding="utf-8"))
 
     @app.post(WEBHOOK_PATH)
     async def telegram_webhook(request: Request) -> Response:

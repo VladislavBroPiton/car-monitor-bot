@@ -360,7 +360,7 @@ async def process_listings(
             if listing.price > limit:
                 continue
 
-        is_new = await mark_seen(listing)
+        is_new = await mark_seen(listing, chat_id)
 
         # Записываем цену в историю
         if listing.price:
@@ -428,16 +428,14 @@ AUCTION_REMINDERS = (
 )
 
 
-async def notify_upcoming_auctions(bot: Bot, chat_id: int = OWNER_ID) -> int:
+async def notify_upcoming_auctions(bot: Bot) -> int:
     """
-    Напоминает о лотах Copart, торги по которым скоро начнутся.
-    Каждому лоту — не больше одного напоминания на стадию.
+    Напоминает о скорых торгах — каждому тому пользователю, которому
+    этот лот присылали. Не больше одного напоминания на стадию.
     """
-    settings = await get_notification_settings(chat_id)
-    if _is_quiet_hours(settings.get("quiet_from", 23), settings.get("quiet_to", 8)):
-        return 0
-
     sent = 0
+    quiet_cache: dict[int, bool] = {}
+
     for stage, hours, header in AUCTION_REMINDERS:
         try:
             rows = await get_lots_to_remind(stage=stage, within_hours=hours)
@@ -446,6 +444,16 @@ async def notify_upcoming_auctions(bot: Bot, chat_id: int = OWNER_ID) -> int:
             continue
 
         for row in rows:
+            user_id = row["user_id"]
+
+            # Тихие часы у каждого свои — читаем настройки по разу на человека
+            if user_id not in quiet_cache:
+                s = await get_notification_settings(user_id)
+                quiet_cache[user_id] = _is_quiet_hours(
+                    s.get("quiet_from", 23), s.get("quiet_to", 8))
+            if quiet_cache[user_id]:
+                continue
+
             when = _fmt_auction_date(row["auction_date"])
             price = _fmt_amount(row["price"], row["currency"])
             text = (
@@ -459,14 +467,14 @@ async def notify_upcoming_auctions(bot: Bot, chat_id: int = OWNER_ID) -> int:
             )
             try:
                 await bot.send_message(
-                    chat_id=chat_id, text=text,
+                    chat_id=user_id, text=text,
                     parse_mode=ParseMode.HTML, disable_web_page_preview=True,
                 )
-                await set_notify_stage(row["external_id"], stage)
+                await set_notify_stage(user_id, row["external_id"], stage)
                 sent += 1
                 await asyncio.sleep(SEND_DELAY)
             except Exception as e:
-                logger.error(f"напоминания: не отправлено по лоту "
+                logger.error(f"напоминания: не отправлено {user_id} по лоту "
                              f"{row['external_id']}: {e}")
 
     if sent:

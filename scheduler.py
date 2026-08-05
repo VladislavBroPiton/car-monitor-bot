@@ -3,13 +3,14 @@ import logging
 from aiogram import Bot
 from fastapi import APIRouter, Header, HTTPException
 
-from config import WEBHOOK_SECRET, OWNER_ID
+from config import WEBHOOK_SECRET
 from rates import usd_rub
 from db.repository import (
     get_all_active_filters,
     cleanup_old_listings,
     record_source_result,
     should_alert,
+    get_admin_ids,
 )
 from parsers.base import SearchFilter
 from parsers.autoru import AutoRuParser
@@ -42,23 +43,21 @@ async def check_sources_health(bot: Bot, per_source: dict[str, int]):
             continue
         name = SOURCE_NAMES.get(source, source)
         logger.error(f"scheduler: {source} пуст {zero_runs} обходов подряд")
-        try:
-            await bot.send_message(
-                chat_id=OWNER_ID,
-                text=(
-                    f"⚠️ <b>Источник {name} молчит</b>\n\n"
-                    f"Уже {zero_runs} обхода подряд возвращает ноль объявлений "
-                    f"по всем активным фильтрам.\n\n"
-                    f"Обычно это значит одно из двух: фильтры стали слишком "
-                    f"узкими либо площадка изменила формат ответа и парсер "
-                    f"нужно поправить.\n\n"
-                    f"<i>Повторю это сообщение, только когда источник "
-                    f"снова оживёт и опять замолчит.</i>"
-                ),
-                parse_mode="HTML",
-            )
-        except Exception as e:
-            logger.error(f"scheduler: алерт не отправлен: {e}")
+        text = (
+            f"⚠️ <b>Источник {name} молчит</b>\n\n"
+            f"Уже {zero_runs} обхода подряд возвращает ноль объявлений "
+            f"по всем активным фильтрам.\n\n"
+            f"Обычно это значит одно из двух: фильтры стали слишком узкими "
+            f"либо площадка изменила формат ответа и парсер нужно поправить.\n\n"
+            f"<i>Повторю это сообщение, только когда источник снова оживёт "
+            f"и опять замолчит.</i>"
+        )
+        for admin in await get_admin_ids():
+            try:
+                await bot.send_message(chat_id=admin, text=text,
+                                       parse_mode="HTML")
+            except Exception as e:
+                logger.error(f"scheduler: алерт не отправлен {admin}: {e}")
 
 
 autoru_parser = AutoRuParser()
