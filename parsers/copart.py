@@ -663,9 +663,9 @@ class CopartParser(BaseParser):
         """
         brands = selected_brands(f)
         if brands and all(b in MAKES_NOT_ON_COPART for b in brands):
+            names = ", ".join(brands)
             return {"total": 0, "matched": 0, "checked": 0, "sample": [],
-                    "note": f"Марок {", ".join(brands)} на аукционе нет — "
-                            f"это рынок США"}
+                    "note": f"Марок {names} на аукционе нет — это рынок США"}
 
         async with aiohttp.ClientSession() as session:
             results = await _post(session, _build_payload(f, 0, with_model=True))

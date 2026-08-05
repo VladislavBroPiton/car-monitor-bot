@@ -278,9 +278,15 @@ ALTER TABLE filters ADD COLUMN IF NOT EXISTS buy_now_only   BOOLEAN;
 ## Тесты
 
 ```bash
+python tests/check_py311.py    # совместимость с версией Python на Render
 python -m pytest tests -q      # либо: python tests/test_copart.py
 node tests/test_miniapp.mjs    # логика Mini App
 ```
+
+**`check_py311.py` запускать перед каждым деплоем.** Render работает на
+Python 3.11; если локально стоит 3.12+, `ast.parse` пропустит конструкции,
+которых на проде нет, и сервис упадёт при импорте. Так уже случалось
+с вложенными одинаковыми кавычками в f-строке (PEP 701).
 
 Офлайн, сеть не нужна. Python-тесты проверяют разбор на зафиксированной выдаче
 API в `tests/fixtures/copart_search.json`; JS-тесты грузят скрипт страницы
