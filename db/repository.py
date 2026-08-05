@@ -32,6 +32,10 @@ _MIGRATIONS = (
     "ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS auction_notify_stage SMALLINT DEFAULT 0",
     "ALTER TABLE favorites     ADD COLUMN IF NOT EXISTS currency TEXT",
     "ALTER TABLE favorites     ADD COLUMN IF NOT EXISTS image_url TEXT",
+    # На боевой базе таблица создавалась до появления этой колонки,
+    # а CREATE TABLE IF NOT EXISTS её не добавляет
+    "ALTER TABLE favorites     ADD COLUMN IF NOT EXISTS transmission TEXT",
+    "ALTER TABLE favorites     ADD COLUMN IF NOT EXISTS filter_name TEXT",
     # Расширенные фильтры Copart
     "ALTER TABLE filters ADD COLUMN IF NOT EXISTS kind TEXT DEFAULT 'ru'",
     "UPDATE filters SET kind = 'ru' WHERE kind IS NULL",

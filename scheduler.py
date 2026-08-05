@@ -187,6 +187,64 @@ def create_scheduler_router(bot: Bot) -> APIRouter:
         result = await run_parsers(bot)
         return result
 
+    @router.get("/debug/filters")
+    async def debug_filters():
+        """
+        Что видит каждый активный фильтр прямо сейчас.
+
+        Отвечает на вопрос «почему тишина»: фильтр слишком узкий, лоты
+        не проходят по цене, или они найдены, но уже отправлялись раньше.
+        """
+        from db.repository import get_all_active_filters, get_pool
+        from parsers.copart import selected_brands, selected_models, _build_filter
+
+        pool = await get_pool()
+        records = await get_all_active_filters()
+        out = []
+
+        for rec in records:
+            f = SearchFilter.from_record(rec)
+            item = {
+                "id": f.id, "имя": f.name, "владелец": f.user_id, "тип": f.kind,
+                "марки": selected_brands(f), "модели": selected_models(f),
+                "год": [f.year_from, f.year_to],
+                "цена": [f.price_from, f.price_to],
+                "пробег_до": f.mileage_to,
+                "документ": f.title_groups, "площадки": f.yards,
+                "исключено": f.damage_exclude,
+                "на_ходу": f.run_and_drive, "купить_сразу": f.buy_now_only,
+                "источники": f.sources,
+            }
+            if f.kind == "copart" or "copart" in (f.sources or []):
+                item["запрос_к_аукциону"] = _build_filter(f)
+                try:
+                    p = await copart_parser.preview(f)
+                    item["нашлось_на_аукционе"] = p.get("total")
+                    item["прошло_фильтры"] = p.get("matched")
+                    item["проверено"] = p.get("checked")
+                    item["примечание"] = p.get("note") or ""
+                    item["примеры"] = [
+                        {"лот": l.external_id, "название": l.title,
+                         "цена": l.price, "купить_сразу": l.buy_now_price}
+                        for l in p.get("sample", [])[:3]
+                    ]
+                except Exception as e:
+                    item["ошибка_предпросмотра"] = f"{type(e).__name__}: {e}"
+
+            # Сколько уже отправлено этому владельцу
+            item["уже_отправлено_владельцу"] = await pool.fetchval(
+                "SELECT COUNT(*) FROM user_seen WHERE user_id = $1", f.user_id)
+            out.append(item)
+
+        totals = {
+            "активных_фильтров": len(records),
+            "всего_фильтров": await pool.fetchval("SELECT COUNT(*) FROM filters"),
+            "лотов_в_каталоге": await pool.fetchval(
+                "SELECT COUNT(*) FROM seen_listings WHERE source = 'copart'"),
+            "пользователей": await pool.fetchval("SELECT COUNT(*) FROM users"),
+        }
+        return {"итого": totals, "фильтры": out}
+
     @router.get("/debug/dbcheck")
     async def debug_dbcheck():
         """
