@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from db.repository import get_pool, get_active_filters, delete_filter, toggle_filter
 from config import OWNER_ID
+from rates import usd_rub
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
@@ -23,18 +24,27 @@ async def api_stats():
     seen_1h        = await pool.fetchval("SELECT COUNT(*) FROM seen_listings WHERE created_at > NOW() - INTERVAL '1 hour'")
     active_filters = await pool.fetchval("SELECT COUNT(*) FROM filters WHERE user_id=$1 AND is_active=TRUE", OWNER_ID)
 
-    # Последние 10 объявлений
+    # Последние объявления — с валютой, иначе доллары подписываются рублями
     recent = await pool.fetch(
-        "SELECT source, external_id, url, title, price, city, created_at FROM seen_listings ORDER BY created_at DESC LIMIT 20"
+        """SELECT source, external_id, url, title, price, city, created_at,
+                  currency, image_url
+           FROM seen_listings ORDER BY created_at DESC LIMIT 20"""
     )
 
-    # Топ дешёвых за 24 часа
+    # Топ дешёвых за 24 часа.
+    # Лоты Copart в долларах, российские — в рублях; сортировать по сырому
+    # числу нельзя, иначе аукцион вытеснит всё остальное. Приводим к рублям.
+    rate = await usd_rub()
     top_deals = await pool.fetch(
-        """SELECT source, external_id, url, title, price, city, created_at
+        """SELECT source, external_id, url, title, price, city, created_at,
+                  currency, image_url,
+                  CASE WHEN source = 'copart' THEN ROUND(price * $1)::INT
+                       ELSE price END AS price_rub
            FROM seen_listings
            WHERE created_at > NOW() - INTERVAL '24 hours'
-           AND price IS NOT NULL AND price > 0
-           ORDER BY price ASC LIMIT 10"""
+             AND price IS NOT NULL AND price > 0
+           ORDER BY price_rub ASC LIMIT 10""",
+        rate,
     )
 
     # Активность по часам за последние 24ч (для графика)
@@ -62,6 +72,8 @@ async def api_stats():
         "seen_24h":        seen_24h,
         "seen_1h":         seen_1h,
         "active_filters":  active_filters,
+        "usd_rate":        round(rate, 2),
+        "top_deals":       [dict(r) for r in top_deals],
         "recent_listings": [dict(r) for r in recent],
         "hourly": [{"hour": str(r["hour"]), "cnt": r["cnt"]} for r in hourly],
         "daily":  [{"day":  str(r["day"]),  "cnt": r["cnt"]} for r in daily],
@@ -189,6 +201,49 @@ async def api_copart_listings(
         "total": total,
         "page":  page,
         "pages": max(1, (total + limit - 1) // limit),
+    }
+
+
+@router.get("/copart/overview")
+async def api_copart_overview():
+    """Сводка по аукциону для дашборда."""
+    pool = await get_pool()
+    rate = await usd_rub()
+
+    row = await pool.fetchrow(
+        """
+        SELECT COUNT(*)                                      AS total,
+               COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours') AS new_24h,
+               COUNT(*) FILTER (WHERE run_and_drive IS TRUE) AS run_drive,
+               COUNT(*) FILTER (WHERE UPPER(title_group) = 'CLEAN TITLE') AS clean,
+               COUNT(*) FILTER (WHERE buy_now_price > 0)     AS buy_now,
+               ROUND(AVG(price))::INT                        AS avg_price,
+               MIN(price)                                    AS min_price
+        FROM seen_listings WHERE source = 'copart'
+        """
+    )
+
+    auctions = await pool.fetch(
+        """
+        SELECT COUNT(*) AS cnt,
+               COUNT(*) FILTER (WHERE auction_date < NOW() + INTERVAL '24 hours') AS today,
+               COUNT(*) FILTER (WHERE auction_date < NOW() + INTERVAL '7 days')   AS week
+        FROM seen_listings
+        WHERE source = 'copart' AND auction_date > NOW()
+        """
+    )
+
+    damages = await pool.fetch(
+        """SELECT COALESCE(damage_description, 'НЕ УКАЗАНО') AS name, COUNT(*) AS cnt
+           FROM seen_listings WHERE source = 'copart'
+           GROUP BY name ORDER BY cnt DESC LIMIT 6"""
+    )
+
+    return {
+        **dict(row or {}),
+        "auctions": dict(auctions[0]) if auctions else {},
+        "damages":  [dict(d) for d in damages],
+        "usd_rate": round(rate, 2),
     }
 
 

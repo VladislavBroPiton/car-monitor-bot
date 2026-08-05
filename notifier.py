@@ -3,7 +3,7 @@ import logging
 from typing import Optional
 from aiogram import Bot
 from aiogram.enums import ParseMode
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
 
 import datetime
 from config import OWNER_ID, USD_RUB_RATE, MAX_NOTIFY_PER_RUN, WEBHOOK_HOST
@@ -273,6 +273,59 @@ def _is_quiet_hours(quiet_from: int, quiet_to: int) -> bool:
     return quiet_from <= hour < quiet_to
 
 
+# С какого числа лотов переходим на альбом. Меньше трёх — обычные карточки
+# с кнопками, они информативнее.
+ALBUM_FROM = 3
+ALBUM_MAX  = 10          # ограничение Telegram на медиагруппу
+
+
+def _album_caption(listing: Listing) -> str:
+    """Короткая подпись под фото в альбоме — длинную Telegram обрежет."""
+    price = (_fmt_amount(listing.buy_now_price or listing.price, listing.currency)
+             if listing.source == "copart" else _fmt_price(listing.price))
+    parts = [f"<b>{listing.title}</b>", f"Лот {listing.external_id} · {price}"]
+    if listing.damage_description:
+        parts.append(damage_ru(listing.damage_description))
+    return "\n".join(parts)[:1000]
+
+
+async def _send_album(bot: Bot, listings: list[Listing], chat_id: int):
+    """
+    Отправить лоты медиагруппами по 10 и следом — сообщение со ссылками.
+    У медиагруппы не бывает кнопок на каждом фото, поэтому ссылки идут отдельно.
+    """
+    for start in range(0, len(listings), ALBUM_MAX):
+        chunk = listings[start:start + ALBUM_MAX]
+        media = [
+            InputMediaPhoto(media=l.image_url, caption=_album_caption(l),
+                            parse_mode=ParseMode.HTML)
+            for l in chunk
+        ]
+        try:
+            await bot.send_media_group(chat_id=chat_id, media=media)
+        except Exception as e:
+            logger.warning(f"notifier: альбом не ушёл ({e}), шлю по одному")
+            for l in chunk:
+                await send_listing(bot, l, chat_id=chat_id)
+                await asyncio.sleep(SEND_DELAY)
+            continue
+
+        # Кнопки-ссылки на лоты этой пачки
+        rows = [[InlineKeyboardButton(
+            text=f"🔗 Лот {l.external_id} · {(l.title or '')[:22]}", url=l.url)]
+            for l in chunk]
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=f"🟡 <b>{len(chunk)} новых лотов</b> — открыть:",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+            )
+        except Exception as e:
+            logger.error(f"notifier: список ссылок не ушёл: {e}")
+        await asyncio.sleep(SEND_DELAY)
+
+
 def _overflow_message(hidden: int, filter_name: Optional[str]) -> str:
     """Сводка по объявлениям, которые не стали слать в чат."""
     word = "объявление" if hidden == 1 else "объявления" if hidden < 5 else "объявлений"
@@ -323,7 +376,17 @@ async def process_listings(
         return new_count
 
     to_send = fresh[:max_send]
-    for listing in to_send:
+
+    # Пачку лотов с фото удобнее смотреть альбомом, чем листать
+    # десяток отдельных сообщений подряд
+    album_ready = [l for l in to_send if l.image_url]
+    if ALBUM_FROM and len(album_ready) >= ALBUM_FROM:
+        await _send_album(bot, album_ready, chat_id)
+        rest = [l for l in to_send if not l.image_url]
+    else:
+        rest = to_send
+
+    for listing in rest:
         # Считаем после mark_seen — текущая запись исключается по external_id
         relists = 0
         if listing.source == "copart" and listing.vin:

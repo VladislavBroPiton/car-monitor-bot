@@ -3,8 +3,14 @@ import logging
 from aiogram import Bot
 from fastapi import APIRouter, Header, HTTPException
 
-from config import WEBHOOK_SECRET
-from db.repository import get_all_active_filters, cleanup_old_listings
+from config import WEBHOOK_SECRET, OWNER_ID
+from rates import usd_rub
+from db.repository import (
+    get_all_active_filters,
+    cleanup_old_listings,
+    record_source_result,
+    should_alert,
+)
 from parsers.base import SearchFilter
 from parsers.autoru import AutoRuParser
 from parsers.drom import DromParser
@@ -13,6 +19,47 @@ from parsers.copart import CopartParser
 from notifier import process_listings, notify_upcoming_auctions
 
 logger = logging.getLogger(__name__)
+
+# Сколько обходов подряд источник может вернуть пусто, прежде чем бить тревогу.
+# Один-два пустых прогона — норма (узкий фильтр, ночь), три подряд — подозрительно.
+ZERO_RUNS_ALERT = 3
+
+SOURCE_NAMES = {
+    "copart": "🟡 Copart",
+    "autoru": "🔵 Auto.ru",
+    "avito":  "🟢 Авито",
+    "drom":   "🟠 Дром",
+}
+
+
+async def check_sources_health(bot: Bot, per_source: dict[str, int]):
+    """Написать владельцу, если источник несколько обходов подряд пуст."""
+    for source, found in per_source.items():
+        zero_runs = await record_source_result(source, found)
+        if found:
+            continue
+        if not await should_alert(source, ZERO_RUNS_ALERT):
+            continue
+        name = SOURCE_NAMES.get(source, source)
+        logger.error(f"scheduler: {source} пуст {zero_runs} обходов подряд")
+        try:
+            await bot.send_message(
+                chat_id=OWNER_ID,
+                text=(
+                    f"⚠️ <b>Источник {name} молчит</b>\n\n"
+                    f"Уже {zero_runs} обхода подряд возвращает ноль объявлений "
+                    f"по всем активным фильтрам.\n\n"
+                    f"Обычно это значит одно из двух: фильтры стали слишком "
+                    f"узкими либо площадка изменила формат ответа и парсер "
+                    f"нужно поправить.\n\n"
+                    f"<i>Повторю это сообщение, только когда источник "
+                    f"снова оживёт и опять замолчит.</i>"
+                ),
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            logger.error(f"scheduler: алерт не отправлен: {e}")
+
 
 autoru_parser = AutoRuParser()
 drom_parser = DromParser()
@@ -30,7 +77,14 @@ async def run_parsers(bot: Bot) -> dict:
     filters = [SearchFilter.from_record(r) for r in records]
     logger.info(f"scheduler: фильтров: {len(filters)}")
 
+    # Курс тянем раз за обход — им пользуются и парсер, и калькулятор
+    try:
+        await usd_rub()
+    except Exception as e:
+        logger.warning(f"scheduler: курс не обновлён: {e}")
+
     total_new = 0
+    per_source: dict[str, int] = {}   # сколько лотов дал каждый источник
 
     for f in filters:
         try:
@@ -57,8 +111,10 @@ async def run_parsers(bot: Bot) -> dict:
             for (source, _), result in zip(parsers, results):
                 if isinstance(result, Exception):
                     logger.error(f"{source} ошибка «{f.name}»: {result}")
+                    per_source.setdefault(source, 0)
                 else:
                     all_listings.extend(result)
+                    per_source[source] = per_source.get(source, 0) + len(result)
 
             if all_listings:
                 new_count = await process_listings(
@@ -75,6 +131,13 @@ async def run_parsers(bot: Bot) -> dict:
         except Exception as e:
             logger.error(f"scheduler: ошибка фильтра «{f.name}»: {e}")
             continue
+
+    # Следим за здоровьем источников: если площадка сменит формат ответа,
+    # это иначе видно только по отсутствию уведомлений
+    try:
+        await check_sources_health(bot, per_source)
+    except Exception as e:
+        logger.warning(f"scheduler: ошибка проверки источников: {e}")
 
     # Напоминаем о торгах, которые вот-вот начнутся
     reminders = 0

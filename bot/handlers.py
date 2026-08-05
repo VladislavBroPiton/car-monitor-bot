@@ -10,6 +10,9 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    InlineQuery,
+    InlineQueryResultArticle,
+    InputTextMessageContent,
 )
 
 from config import OWNER_ID, WEBHOOK_HOST
@@ -26,6 +29,7 @@ from db.repository import (
     find_lots,
     get_relist_history,
     copart_price_stats,
+    duplicate_filter,
 )
 from costs import estimate, format_breakdown
 from parsers.copart import (
@@ -439,6 +443,8 @@ def _filter_detail_kb(filter_id: int, is_active: bool,
     if is_copart:
         rows.append([InlineKeyboardButton(
             text="🔎 Проверить сейчас", callback_data=f"filter_check:{filter_id}")])
+    rows.append([InlineKeyboardButton(
+        text="📄 Дублировать", callback_data=f"filter_copy:{filter_id}")])
     rows.append([
         InlineKeyboardButton(text="🗑 Удалить",  callback_data=f"filter_delete:{filter_id}"),
         InlineKeyboardButton(text="◀️ К списку", callback_data="filters_list:0"),
@@ -1857,6 +1863,7 @@ async def _finish_filter(msg, state: FSMContext, sources: list, from_call: bool)
     f = await create_filter(
         user_id=OWNER_ID,
         name=data["name"],
+        # Российский мастер выбирает одну марку и модель — списки тут не нужны
         brand=data.get("brand"),
         model=data.get("model"),
         year_from=data.get("year_from"),
@@ -1976,9 +1983,14 @@ async def cb_copart_add(call: CallbackQuery, state: FSMContext):
 CATALOG_PAGE = 12
 
 
-def _catalog_kb(items: list, page: int, pick: str, nav: str,
-                any_cb: str) -> InlineKeyboardMarkup:
-    """Страница справочника: кнопки «НАЗВАНИЕ · N» по две в ряд."""
+def _catalog_kb(items: list, page: int, pick: str, nav: str, any_cb: str,
+                selected: list[str] = None, done_cb: str = None,
+                back_cb: str = None) -> InlineKeyboardMarkup:
+    """
+    Страница справочника: кнопки «НАЗВАНИЕ · N» по две в ряд.
+    Отмеченные помечаются галочкой — можно выбрать несколько.
+    """
+    selected = selected or []
     pages = max(1, (len(items) + CATALOG_PAGE - 1) // CATALOG_PAGE)
     page = max(0, min(page, pages - 1))
     start = page * CATALOG_PAGE
@@ -1988,9 +2000,10 @@ def _catalog_kb(items: list, page: int, pick: str, nav: str,
     for i in range(0, len(chunk), 2):
         row = []
         for j, (name, count) in enumerate(chunk[i:i + 2]):
-            label = name if len(name) <= 16 else name[:15] + "…"
+            mark = "✅ " if name in selected else ""
+            label = name if len(name) <= 14 else name[:13] + "…"
             row.append(InlineKeyboardButton(
-                text=f"{label} · {count}",
+                text=f"{mark}{label} · {count}",
                 callback_data=f"{pick}:{start + i + j}",
             ))
         rows.append(row)
@@ -2004,18 +2017,30 @@ def _catalog_kb(items: list, page: int, pick: str, nav: str,
             nav_row.append(InlineKeyboardButton(text="▶️", callback_data=f"{nav}:{page+1}"))
         rows.append(nav_row)
 
-    rows.append([InlineKeyboardButton(text="⏭ Не важно", callback_data=any_cb)])
+    if selected and done_cb:
+        rows.append([InlineKeyboardButton(
+            text=f"▶️ Далее ({len(selected)} выбрано)", callback_data=done_cb)])
+
+    last = [InlineKeyboardButton(text="⏭ Не важно", callback_data=any_cb)]
+    if back_cb:
+        last.insert(0, InlineKeyboardButton(text="◀️ Назад", callback_data=back_cb))
+    rows.append(last)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def _show_makes(msg, state: FSMContext, page: int = 0, edit: bool = False):
+    data  = await state.get_data()
+    picked = list(data.get("brands", []))
     makes = await fetch_makes()
-    text = _cp_step(
-        2, "Шаг 2 — Марка",
-        f"Список берётся прямо с аукциона — {len(makes)} марок, "
-        f"рядом число лотов.\nМожно и отправить текстом: <code>TOYOTA</code>",
-    )
-    kb = _catalog_kb(makes, page, "cpw_mk", "cpw_mk_pg", "cpw_mk_any")
+    hint = (f"Список берётся прямо с аукциона — {len(makes)} марок, "
+            f"рядом число лотов.\n"
+            f"<b>Можно отметить несколько.</b> Или отправь текстом: "
+            f"<code>TOYOTA</code>")
+    if picked:
+        hint += f"\n\nВыбрано: <b>{', '.join(picked)}</b>"
+    text = _cp_step(2, "Шаг 2 — Марка", hint)
+    kb = _catalog_kb(makes, page, "cpw_mk", "cpw_mk_pg", "cpw_mk_any",
+                     selected=picked, done_cb="cpw_mk_done")
     if edit:
         await msg.edit_text(text, parse_mode="HTML", reply_markup=kb)
     else:
@@ -2023,33 +2048,113 @@ async def _show_makes(msg, state: FSMContext, page: int = 0, edit: bool = False)
 
 
 async def _show_models(msg, state: FSMContext, page: int = 0, edit: bool = False):
-    data = await state.get_data()
-    brand = data.get("brand")
+    data   = await state.get_data()
+    brands = list(data.get("brands", []))
+    picked = list(data.get("models", []))
 
-    if not brand:
-        text = _cp_step(3, "Шаг 3 — Модель",
-                        "Марка не выбрана — отправь модель текстом или пропусти.")
-        kb = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="⏭ Не важно", callback_data="cpw_md_any")
-        ]])
-    else:
-        models = await fetch_models(brand)
-        if not models:
-            text = _cp_step(3, "Шаг 3 — Модель",
-                            f"Для <b>{brand}</b> список моделей не пришёл. "
-                            f"Отправь текстом или пропусти.")
-            kb = InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="⏭ Не важно", callback_data="cpw_md_any")
-            ]])
+    async def send(text, kb):
+        if edit:
+            await msg.edit_text(text, parse_mode="HTML", reply_markup=kb)
         else:
-            text = _cp_step(3, f"Шаг 3 — Модель {brand}",
-                            f"{len(models)} моделей на аукционе, рядом число лотов.")
-            kb = _catalog_kb(models, page, "cpw_md", "cpw_md_pg", "cpw_md_any")
+            await msg.answer(text, parse_mode="HTML", reply_markup=kb)
 
-    if edit:
-        await msg.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    simple_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="◀️ Назад",    callback_data="cpw_back:brand"),
+        InlineKeyboardButton(text="⏭ Не важно", callback_data="cpw_md_any"),
+    ]])
+
+    if not brands:
+        await send(_cp_step(3, "Шаг 3 — Модель",
+                            "Марка не выбрана — отправь модель текстом или пропусти."),
+                   simple_kb)
+        return
+
+    # Модели показываем по первой выбранной марке: у разных марок
+    # справочники разные, смешивать их в одном списке нельзя
+    models = await fetch_models(brands[0])
+    if not models:
+        await send(_cp_step(3, "Шаг 3 — Модель",
+                            f"Для <b>{brands[0]}</b> список моделей не пришёл. "
+                            f"Отправь текстом или пропусти."),
+                   simple_kb)
+        return
+
+    title = f"Шаг 3 — Модель {brands[0]}"
+    hint = f"{len(models)} моделей на аукционе. <b>Можно отметить несколько.</b>"
+    if len(brands) > 1:
+        hint += (f"\n<i>Марок выбрано {len(brands)}; список моделей показан "
+                 f"для {brands[0]}. Для остальных марок модель не ограничивается.</i>")
+    if picked:
+        hint += f"\n\nВыбрано: <b>{', '.join(picked)}</b>"
+
+    await send(_cp_step(3, title, hint),
+               _catalog_kb(models, page, "cpw_md", "cpw_md_pg", "cpw_md_any",
+                           selected=picked, done_cb="cpw_md_done",
+                           back_cb="cpw_back:brand"))
+
+
+# Куда возвращает «Назад» с каждого шага. Раньше ошибка на шаге 4
+# означала пройти мастер заново.
+CPW_BACK = {
+    "brand":      CopartForm.brand,
+    "model":      CopartForm.model,
+    "year_from":  CopartForm.year_from,
+    "year_to":    CopartForm.year_to,
+    "price_from": CopartForm.price_from,
+    "price_to":   CopartForm.price_to,
+    "mileage_to": CopartForm.mileage_to,
+}
+
+
+@router.callback_query(F.data.startswith("cpw_back:"))
+async def cpw_back(call: CallbackQuery, state: FSMContext):
+    target = call.data.split(":", 1)[1]
+    step = CPW_BACK.get(target)
+    if not step:
+        await call.answer()
+        return
+
+    await state.set_state(step)
+    if target == "brand":
+        await _show_makes(call.message, state, edit=True)
+    elif target == "model":
+        await _show_models(call.message, state, edit=True)
     else:
-        await msg.answer(text, parse_mode="HTML", reply_markup=kb)
+        await call.message.edit_text(
+            _cp_step(*CPW_TEXT_STEPS[target]),
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="◀️ Назад",
+                                     callback_data=f"cpw_back:{CPW_PREV[target]}")
+            ]]),
+        )
+    await call.answer()
+
+
+# Тексты текстовых шагов — чтобы «Назад» рисовал ровно то же, что и вперёд
+CPW_TEXT_STEPS = {
+    "year_from":  (4, "Шаг 4 — Год от", "Например: <code>2015</code>"),
+    "year_to":    (5, "Шаг 5 — Год до", "Например: <code>2022</code>"),
+    "price_from": (6, "Шаг 6 — Цена от, $",
+                   "Цена <b>в долларах</b> — так же, как на аукционе.\n"
+                   "Например: <code>3000</code>"),
+    "price_to":   (7, "Шаг 7 — Цена до, $", "Например: <code>12000</code>"),
+    "mileage_to": (8, "Шаг 8 — Пробег до, миль",
+                   "Одометр на аукционе <b>в милях</b>.\n"
+                   "Например: <code>90000</code>  (это примерно 145 000 км)"),
+}
+
+CPW_PREV = {
+    "year_from": "model", "year_to": "year_from", "price_from": "year_to",
+    "price_to": "price_from", "mileage_to": "price_to",
+}
+
+
+def _cpw_text_kb(step_key: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="◀️ Назад",
+                             callback_data=f"cpw_back:{CPW_PREV[step_key]}")
+    ]])
 
 
 @router.message(StateFilter(CopartForm.name))
@@ -2067,38 +2172,63 @@ async def cpw_make_page(call: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("cpw_mk:"), StateFilter(CopartForm.brand))
 async def cpw_make_pick(call: CallbackQuery, state: FSMContext):
-    # Справочник закэширован, поэтому индекс разрешаем без обращения к сети
+    """Отметить марку. Справочник закэширован — индекс разрешаем без сети."""
     makes = await fetch_makes()
     idx = int(call.data.split(":")[1])
-    brand = makes[idx][0] if 0 <= idx < len(makes) else None
-    await _cpw_set_brand(call.message, state, brand, edit=True)
+    if not (0 <= idx < len(makes)):
+        await call.answer()
+        return
+
+    name = makes[idx][0]
+    data = await state.get_data()
+    picked = list(data.get("brands", []))
+    if name in picked:
+        picked.remove(name)
+    else:
+        picked.append(name)
+    await state.update_data(brands=picked)
+
+    page = idx // CATALOG_PAGE
+    await _show_makes(call.message, state, page, edit=True)
+    await call.answer(f"Выбрано: {len(picked)}" if picked else "Снято")
+
+
+@router.callback_query(F.data == "cpw_mk_done", StateFilter(CopartForm.brand))
+async def cpw_make_done(call: CallbackQuery, state: FSMContext):
+    await _cpw_after_brands(call.message, state, edit=True)
     await call.answer()
 
 
 @router.callback_query(F.data == "cpw_mk_any", StateFilter(CopartForm.brand))
 async def cpw_make_any(call: CallbackQuery, state: FSMContext):
-    await _cpw_set_brand(call.message, state, None, edit=True)
+    await state.update_data(brands=[])
+    await _cpw_after_brands(call.message, state, edit=True)
     await call.answer()
 
 
 @router.message(StateFilter(CopartForm.brand))
 async def cpw_brand_text(message: Message, state: FSMContext):
     raw = message.text.strip().upper()
-    await _cpw_set_brand(message, state, None if raw == "-" else raw, edit=False)
+    # Через запятую можно перечислить сразу несколько
+    brands = [] if raw == "-" else [b.strip() for b in raw.split(",") if b.strip()]
+    await state.update_data(brands=brands)
+    await _cpw_after_brands(message, state, edit=False)
 
 
-async def _cpw_set_brand(msg, state: FSMContext, brand, edit: bool):
-    await state.update_data(brand=brand)
+async def _cpw_after_brands(msg, state: FSMContext, edit: bool):
+    data = await state.get_data()
+    brands = list(data.get("brands", []))
     await state.set_state(CopartForm.model)
 
-    if brand and brand in MAKES_NOT_ON_COPART:
-        await state.update_data(brand=brand)
+    absent = [b for b in brands if b in MAKES_NOT_ON_COPART]
+    if brands and len(absent) == len(brands):
         text = _cp_step(3, "Шаг 3 — Модель",
-                        f"⚠️ <b>{brand}</b> на Copart не встречается — это рынок США. "
-                        f"Фильтр создастся, но лотов не будет.\n\n"
+                        f"⚠️ <b>{', '.join(absent)}</b> на Copart не встречается — "
+                        f"это рынок США. Фильтр создастся, но лотов не будет.\n\n"
                         f"Отправь модель текстом или пропусти.")
         kb = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="⏭ Не важно", callback_data="cpw_md_any")
+            InlineKeyboardButton(text="◀️ Назад",    callback_data="cpw_back:brand"),
+            InlineKeyboardButton(text="⏭ Не важно", callback_data="cpw_md_any"),
         ]])
         if edit:
             await msg.edit_text(text, parse_mode="HTML", reply_markup=kb)
@@ -2118,33 +2248,56 @@ async def cpw_model_page(call: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("cpw_md:"), StateFilter(CopartForm.model))
 async def cpw_model_pick(call: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    models = await fetch_models(data.get("brand") or "")
+    brands = list(data.get("brands", []))
+    models = await fetch_models(brands[0] if brands else "")
     idx = int(call.data.split(":")[1])
-    model = models[idx][0] if 0 <= idx < len(models) else None
-    await _cpw_next_after_model(call.message, state, model, edit=True)
+    if not (0 <= idx < len(models)):
+        await call.answer()
+        return
+
+    name = models[idx][0]
+    picked = list(data.get("models", []))
+    if name in picked:
+        picked.remove(name)
+    else:
+        picked.append(name)
+    await state.update_data(models=picked)
+
+    await _show_models(call.message, state, idx // CATALOG_PAGE, edit=True)
+    await call.answer(f"Выбрано: {len(picked)}" if picked else "Снято")
+
+
+@router.callback_query(F.data == "cpw_md_done", StateFilter(CopartForm.model))
+async def cpw_model_done(call: CallbackQuery, state: FSMContext):
+    await _cpw_next_after_model(call.message, state, edit=True)
     await call.answer()
 
 
 @router.callback_query(F.data == "cpw_md_any", StateFilter(CopartForm.model))
 async def cpw_model_any(call: CallbackQuery, state: FSMContext):
-    await _cpw_next_after_model(call.message, state, None, edit=True)
+    await state.update_data(models=[])
+    await _cpw_next_after_model(call.message, state, edit=True)
     await call.answer()
 
 
 @router.message(StateFilter(CopartForm.model))
 async def cpw_model(message: Message, state: FSMContext):
     raw = message.text.strip().upper()
-    await _cpw_next_after_model(message, state, None if raw == "-" else raw, edit=False)
+    models = [] if raw == "-" else [m.strip() for m in raw.split(",") if m.strip()]
+    await state.update_data(models=models)
+    await _cpw_next_after_model(message, state, edit=False)
 
 
-async def _cpw_next_after_model(msg, state: FSMContext, model, edit: bool):
-    await state.update_data(model=model)
+async def _cpw_next_after_model(msg, state: FSMContext, edit: bool):
     await state.set_state(CopartForm.year_from)
     text = _cp_step(4, "Шаг 4 — Год от", "Например: <code>2015</code>")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="◀️ Назад", callback_data="cpw_back:model")
+    ]])
     if edit:
-        await msg.edit_text(text, parse_mode="HTML")
+        await msg.edit_text(text, parse_mode="HTML", reply_markup=kb)
     else:
-        await msg.answer(text, parse_mode="HTML")
+        await msg.answer(text, parse_mode="HTML", reply_markup=kb)
 
 
 @router.message(StateFilter(CopartForm.year_from))
@@ -2156,8 +2309,8 @@ async def cpw_year_from(message: Message, state: FSMContext):
     await state.update_data(year_from=val)
     await state.set_state(CopartForm.year_to)
     await message.answer(
-        _cp_step(5, "Шаг 5 — Год до", "Например: <code>2022</code>"),
-        parse_mode="HTML",
+        _cp_step(*CPW_TEXT_STEPS["year_to"]),
+        parse_mode="HTML", reply_markup=_cpw_text_kb("year_to"),
     )
 
 
@@ -2170,13 +2323,8 @@ async def cpw_year_to(message: Message, state: FSMContext):
     await state.update_data(year_to=val)
     await state.set_state(CopartForm.price_from)
     await message.answer(
-        _cp_step(6, "Шаг 6 — Цена от, $",
-                 "Цена <b>в долларах</b> — так же, как на аукционе.\n"
-                 "Например: <code>3000</code>\n\n"
-                 "<i>Это оценочная стоимость лота либо цена «купить сразу», "
-                 "а не текущая ставка — ставки Copart показывает "
-                 "только зарегистрированным.</i>"),
-        parse_mode="HTML",
+        _cp_step(*CPW_TEXT_STEPS["price_from"]),
+        parse_mode="HTML", reply_markup=_cpw_text_kb("price_from"),
     )
 
 
@@ -2189,8 +2337,8 @@ async def cpw_price_from(message: Message, state: FSMContext):
     await state.update_data(price_from=val)
     await state.set_state(CopartForm.price_to)
     await message.answer(
-        _cp_step(7, "Шаг 7 — Цена до, $", "Например: <code>12000</code>"),
-        parse_mode="HTML",
+        _cp_step(*CPW_TEXT_STEPS["price_to"]),
+        parse_mode="HTML", reply_markup=_cpw_text_kb("price_to"),
     )
 
 
@@ -2203,10 +2351,8 @@ async def cpw_price_to(message: Message, state: FSMContext):
     await state.update_data(price_to=val)
     await state.set_state(CopartForm.mileage_to)
     await message.answer(
-        _cp_step(8, "Шаг 8 — Пробег до, миль",
-                 "Одометр на аукционе <b>в милях</b>, поэтому и здесь мили.\n"
-                 "Например: <code>90000</code>  (это примерно 145 000 км)"),
-        parse_mode="HTML",
+        _cp_step(*CPW_TEXT_STEPS["mileage_to"]),
+        parse_mode="HTML", reply_markup=_cpw_text_kb("mileage_to"),
     )
 
 
@@ -2326,7 +2472,9 @@ def _filter_from_wizard(data: dict, opt: str = "none") -> SearchFilter:
     """Собрать SearchFilter из состояния мастера — для предпросмотра."""
     return SearchFilter(
         id=0, user_id=OWNER_ID, name=data.get("name") or "проверка", kind="copart",
-        brand=data.get("brand"), model=data.get("model"),
+        brands=data.get("brands") or [], models=data.get("models") or [],
+        brand=(data.get("brands") or [None])[0],
+        model=(data.get("models") or [None])[0],
         year_from=data.get("year_from"), year_to=data.get("year_to"),
         price_from=data.get("price_from"), price_to=data.get("price_to"),
         mileage_to=data.get("mileage_to"), sources=["copart"],
@@ -2424,8 +2572,10 @@ async def cpw_finish(call: CallbackQuery, state: FSMContext):
         user_id=OWNER_ID,
         name=data["name"],
         kind="copart",
-        brand=data.get("brand"),
-        model=data.get("model"),
+        brand=(data.get("brands") or [None])[0],
+        model=(data.get("models") or [None])[0],
+        brands=data.get("brands") or None,
+        models=data.get("models") or None,
         year_from=data.get("year_from"),
         year_to=data.get("year_to"),
         price_from=data.get("price_from"),
@@ -2456,6 +2606,32 @@ async def cpw_finish(call: CallbackQuery, state: FSMContext):
         ]),
     )
     await call.answer("✅ Создан")
+
+
+@router.callback_query(F.data.startswith("filter_copy:"))
+async def cb_filter_copy(call: CallbackQuery):
+    """Создать копию фильтра — «то же самое, но другая марка»."""
+    if not _is_owner(call.from_user.id):
+        await call.answer("⛔", show_alert=True)
+        return
+
+    filter_id = int(call.data.split(":")[1])
+    copy = await duplicate_filter(filter_id, OWNER_ID)
+    if not copy:
+        await call.answer("Не удалось скопировать", show_alert=True)
+        return
+
+    await call.message.answer(
+        f"📄 <b>Копия создана</b>\n\n{_render_filter(copy)}\n\n"
+        f"<i>Поменяй что нужно — например марку — и фильтр готов.</i>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✏️ Изменить копию",
+                                  callback_data=f"filter_edit:{copy['id']}")],
+            [InlineKeyboardButton(text="📋 К списку", callback_data="filters_list:0")],
+        ]),
+    )
+    await call.answer("📄 Скопировано")
 
 
 @router.callback_query(F.data.startswith("filter_check:"))
@@ -2681,6 +2857,65 @@ async def cb_lot_search_run(message: Message, state: FSMContext):
             [InlineKeyboardButton(text="🏠 Меню",   callback_data="main_menu")],
         ]),
     )
+
+
+# ── Инлайн-режим: поиск лота из любого чата ───────────────────────────────────
+#
+# Работает как «@имя_бота 41514795» или «@имя_бота CAMRY».
+# Чтобы заработало, инлайн-режим нужно один раз включить у @BotFather:
+# /setinline → выбрать бота → задать подсказку, например «номер лота или VIN».
+
+@router.inline_query()
+async def inline_lot_search(query: InlineQuery):
+    if query.from_user.id != OWNER_ID:
+        await query.answer([], cache_time=5, is_personal=True)
+        return
+
+    text = (query.query or "").strip()
+    if len(text) < 2:
+        await query.answer(
+            [], cache_time=5, is_personal=True,
+            switch_pm_text="Введи номер лота, VIN или марку",
+            switch_pm_parameter="start",
+        )
+        return
+
+    try:
+        rows = await find_lots(text, limit=20)
+    except Exception as e:
+        logger.error(f"инлайн-поиск «{text}»: {e}")
+        await query.answer([], cache_time=5, is_personal=True)
+        return
+
+    results = []
+    for row in rows:
+        buy_now = _opt(row, "buy_now_price")
+        price = _fmt_usd(buy_now or row["price"])
+        desc_parts = [price]
+        if row["year"]:
+            desc_parts.append(f"{row['year']} г.")
+        damage = _opt(row, "damage_description")
+        if damage:
+            desc_parts.append(damage_ru(damage))
+        if row["city"]:
+            desc_parts.append(row["city"])
+
+        results.append(InlineQueryResultArticle(
+            id=str(row["external_id"])[:64],
+            title=row["title"] or f"Лот {row['external_id']}",
+            description="  ·  ".join(desc_parts),
+            thumbnail_url=_opt(row, "image_url") or None,
+            input_message_content=InputTextMessageContent(
+                message_text=_render_copart_lot(row),
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            ),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="🔗 Открыть лот", url=row["url"]),
+            ]]),
+        ))
+
+    await query.answer(results, cache_time=30, is_personal=True)
 
 
 # ── Copart ────────────────────────────────────────────────────────────────────

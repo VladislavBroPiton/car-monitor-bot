@@ -175,6 +175,58 @@ canvas#chart{width:100%;height:120px;display:block}
 .cp-cost-row.total b{color:var(--copart2);font-weight:800}
 .cp-cost-note{font-size:11px;color:var(--text3);margin-top:8px;line-height:1.45}
 .cp-relist{display:inline-block;font-size:11px;font-weight:700;color:#1C1C1E;background:var(--copart);border-radius:8px;padding:2px 7px;margin-top:6px}
+
+/* ── Отсчёт до торгов: чем ближе, тем тревожнее ── */
+.cp-auction.soon{background:rgba(245,158,11,0.9);border-color:transparent;color:#1C1C1E}
+.cp-auction.urgent{background:rgba(239,68,68,0.9);border-color:transparent;color:#fff}
+
+/* ── Тяжесть повреждения цветом: раньше всё было красным ── */
+.cp-damage.minor{color:var(--green);background:rgba(34,197,94,0.12)}
+.cp-damage.medium{color:var(--copart2);background:rgba(245,158,11,0.12)}
+.cp-damage.severe{color:var(--red);background:rgba(239,68,68,0.12)}
+
+/* ── Разделители по датам торгов ── */
+.cp-daysep{display:flex;align-items:center;gap:10px;margin:18px 16px 2px;
+  font-size:12px;font-weight:700;color:var(--copart2);text-transform:uppercase;
+  letter-spacing:0.6px}
+.cp-daysep::after{content:'';flex:1;height:1px;background:var(--border)}
+
+/* ── Режим сетки 2× ── */
+.cp-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:0 16px}
+.cp-grid .cp-card{margin:0;padding:10px;border-left-width:2px}
+.cp-grid .cp-photo{margin:-10px -10px 8px -10px;aspect-ratio:1/1}
+.cp-grid .cp-title{font-size:12px;line-height:1.3}
+.cp-grid .cp-price{font-size:15px}
+.cp-grid .cp-price-note,.cp-grid .cp-vin,.cp-grid .cp-repair{display:none}
+.cp-grid .cp-rows{gap:2px}
+.cp-grid .cp-row{font-size:11px}
+.cp-grid .cp-footer{margin-top:8px}
+.cp-grid .cp-open{padding:7px;font-size:11px}
+.cp-grid .cp-photo-tags{left:5px;right:5px;bottom:5px;gap:3px}
+.cp-grid .cp-tag{font-size:9px;padding:2px 5px}
+.cp-grid .cp-cost{display:none}
+.view-toggle{margin-left:auto;background:none;border:1px solid var(--border);
+  border-radius:8px;color:var(--text2);padding:5px 10px;font-size:12px;cursor:pointer}
+
+/* ── Лайтбокс: разглядеть повреждение — главное, зачем смотрят фото ── */
+.lightbox{position:fixed;inset:0;z-index:100;background:rgba(0,0,0,0.94);
+  display:none;align-items:center;justify-content:center;padding:16px}
+.lightbox.show{display:flex}
+.lightbox img{max-width:100%;max-height:88vh;object-fit:contain;border-radius:8px}
+.lightbox-close{position:absolute;top:14px;right:16px;width:38px;height:38px;
+  border-radius:50%;background:rgba(255,255,255,0.14);color:#fff;border:none;
+  font-size:20px;cursor:pointer;line-height:1}
+.lightbox-cap{position:absolute;left:16px;right:16px;bottom:18px;text-align:center;
+  color:#fff;font-size:13px;text-shadow:0 1px 4px rgba(0,0,0,0.9)}
+
+/* ── Сводка по аукциону на дашборде ── */
+.cp-sum{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:4px}
+.cp-sum-box{background:var(--bg3);border:1px solid var(--border);border-radius:var(--r-sm);padding:10px 8px;text-align:center}
+.cp-sum-num{font-size:18px;font-weight:800;color:var(--copart2)}
+.cp-sum-lbl{font-size:10px;color:var(--text2);margin-top:2px;line-height:1.25}
+.cp-bar{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text2);padding:3px 0}
+.cp-bar-track{flex:1;height:6px;background:var(--bg3);border-radius:3px;overflow:hidden}
+.cp-bar-fill{height:100%;background:var(--copart);border-radius:3px}
 .cp-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
 .cp-lot{font-size:11px;font-weight:700;color:var(--copart2);letter-spacing:0.3px}
 .cp-auction{font-size:11px;font-weight:600;color:var(--copart);background:var(--copart-dim);border:1px solid var(--copart-border);border-radius:10px;padding:3px 8px;white-space:nowrap}
@@ -336,6 +388,14 @@ body.light-force{--bg:#F5F5F7;--bg2:#FFFFFF;--bg3:#F0F0F3;--bg4:#E8E8ED;--border
     </div>
   </div>
 
+  <!-- Сводка по аукциону — основной источник должен быть виден и здесь -->
+  <div class="card" style="border-color:var(--copart-border)">
+    <div class="card-title" style="color:var(--copart2)">🟡 Аукцион Copart</div>
+    <div class="cp-sum" id="cp-sum"><div class="spinner"></div></div>
+    <div id="cp-sum-damages" style="margin-top:12px"></div>
+    <div id="cp-sum-rate" style="font-size:11px;color:var(--text3);margin-top:10px"></div>
+  </div>
+
   <div class="card">
     <div class="card-title" style="display:flex;align-items:center;justify-content:space-between">
       Последняя активность
@@ -408,6 +468,7 @@ body.light-force{--bg:#F5F5F7;--bg2:#FFFFFF;--bg3:#F0F0F3;--bg4:#E8E8ED;--border
     <button class="cp-sort-btn" onclick="toggleCpFlag('rnd',this)">🚀 На ходу</button>
     <button class="cp-sort-btn" onclick="toggleCpFlag('buynow',this)">⚡️ Купить сразу</button>
     <button class="cp-sort-btn" onclick="toggleCpFlag('keys',this)">🔑 С ключами</button>
+    <button class="view-toggle" id="cp-view-btn" onclick="toggleCpView(this)">⊞ Сетка</button>
   </div>
   <div id="cp-list"></div>
   <button class="load-more" id="cp-more" onclick="loadMoreCopart()" style="display:none">Загрузить ещё</button>
@@ -586,6 +647,13 @@ body.light-force{--bg:#F5F5F7;--bg2:#FFFFFF;--bg3:#F0F0F3;--bg4:#E8E8ED;--border
 </nav>
 </div>
 
+<!-- Полноэкранный просмотр фото лота -->
+<div class="lightbox" id="lightbox" onclick="closePhoto(event)">
+  <button class="lightbox-close" onclick="closePhoto()">✕</button>
+  <img id="lightbox-img" src="" alt="">
+  <div class="lightbox-cap" id="lightbox-cap"></div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -641,7 +709,7 @@ function go(name) {
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
   document.getElementById(`page-${name}`).classList.add('active');
   document.getElementById(`nav-${name}`).classList.add('active');
-  if(name==='dashboard') loadDashboard();
+  if(name==='dashboard') { loadDashboard(); loadCopartOverview(); }
   if(name==='listings')  { lstPage=1; loadListings(true); }
   if(name==='copart')    { cpPage=1; loadCopart(true); }
   if(name==='favorites') loadFavorites();
@@ -655,7 +723,15 @@ function toast(msg) {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-const fmtP = v => v ? v.toLocaleString('ru-RU')+' ₽' : '—';
+// Copart торгует в долларах, российские площадки — в рублях.
+// Подписывать всё рублями нельзя: разница почти в сто раз.
+const CUR_SIGN = {USD:'$', CAD:'CA$'};
+function fmtP(v, l) {
+  if(!v) return '—';
+  const isAuction = l && (l.source === 'copart' || l.currency);
+  if(isAuction) return (CUR_SIGN[l.currency] || '$') + v.toLocaleString('ru-RU');
+  return v.toLocaleString('ru-RU') + ' ₽';
+}
 const fmtM = v => v ? v.toLocaleString('ru-RU')+' км' : '';
 function timeAgo(s) {
   const d=(Date.now()-new Date(s))/1000;
@@ -719,7 +795,7 @@ function renderActivity(items) {
       <div class="act-icon ${l.source}">${srcIcon(l.source)}</div>
       <div class="act-body">
         <div class="act-title">${l.title||'Авто'}</div>
-        <div class="act-sub">${fmtP(l.price)}${l.city?' · '+l.city:''}</div>
+        <div class="act-sub">${fmtP(l.price, l)}${l.city?' · '+l.city:''}</div>
       </div>
       <div class="act-time">${timeAgo(l.created_at)}</div>
     </div>
@@ -859,7 +935,7 @@ function listingCard(l, faved=false) {
       ${photoHtml}
       <div class="listing-src">${srcIcon(l.source)} ${srcName(l.source)}</div>
       <div class="listing-title">${l.title||'Авто'}</div>
-      <div class="listing-price">${fmtP(l.price)}</div>
+      <div class="listing-price">${fmtP(l.price, l)}</div>
       ${specs?`<div class="listing-specs">${specs}</div>`:''}
       ${l.city?`<div class="listing-city">📍 ${l.city}</div>`:''}
       <div class="listing-footer">
@@ -907,7 +983,7 @@ function renderFavorites() {
     <div class="listing-card">
       <div class="listing-src">${srcIcon(l.source)} ${srcName(l.source)}</div>
       <div class="listing-title">${l.title||'Авто'}</div>
-      <div class="listing-price">${fmtP(l.price)}</div>
+      <div class="listing-price">${fmtP(l.price, l)}</div>
       ${l.mileage?`<div class="listing-specs">${l.year?l.year+' г. · ':''}${fmtM(l.mileage)}</div>`:''}
       ${l.city?`<div class="listing-city">📍 ${l.city}</div>`:''}
       <div class="listing-footer">
@@ -1094,7 +1170,7 @@ function listingCard(l, faved=false) {
     <div class="listing-card" id="lc-${l.source}-${l.external_id}">
       <div class="listing-src">${srcIcon(l.source)} ${srcName(l.source)}</div>
       <div class="listing-title">${l.title||'Авто'}</div>
-      <div class="listing-price">${fmtP(l.price)}</div>
+      <div class="listing-price">${fmtP(l.price, l)}</div>
       ${specs?`<div class="listing-specs">${specs}</div>`:''}
       ${l.city?`<div class="listing-city">📍 ${l.city}</div>`:''}
       <div class="listing-footer">
@@ -1143,15 +1219,92 @@ function cpDate(raw) {
   return isNaN(d) ? null : d;
 }
 
+// Живой отсчёт вместо голой даты: «через 2 часа» читается быстрее, чем «13.08»
 function cpAuctionLabel(raw) {
   const d = cpDate(raw);
   if(!d) return null;
-  const days = Math.floor((d - Date.now()) / 86400000);
-  const text = d.toLocaleString('ru-RU', {
-    day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit',
-    timeZone:'Europe/Moscow',
+  const ms = d - Date.now();
+  const time = d.toLocaleString('ru-RU', {
+    hour:'2-digit', minute:'2-digit', timeZone:'Europe/Moscow',
   });
-  return { text, soon: days >= 0 && days <= 3 };
+  const date = d.toLocaleString('ru-RU', {
+    day:'2-digit', month:'2-digit', timeZone:'Europe/Moscow',
+  });
+
+  if(ms < 0)          return { text:'торги прошли', level:'' };
+  const h = ms / 3600000;
+  if(h < 1)           return { text:`через ${Math.max(1,Math.round(ms/60000))} мин`, level:'urgent' };
+  if(h < 6)           return { text:`через ${Math.round(h)} ч · ${time}`, level:'urgent' };
+  if(h < 24)          return { text:`сегодня в ${time}`, level:'urgent' };
+  if(h < 48)          return { text:`завтра в ${time}`, level:'soon' };
+  const days = Math.floor(h / 24);
+  if(days <= 6)       return { text:`через ${days} дн · ${time}`, level:'soon' };
+  return { text:`${date} в ${time}`, level:'' };
+}
+
+// Тяжесть повреждения. Мелкие царапины и «круговые» — разные вещи,
+// а раньше и то и другое было красным
+const CP_SEVERITY = {
+  minor:  ['MINOR DENT/SCRATCHES','NORMAL WEAR','HAIL','VANDALISM','DAMAGE HISTORY'],
+  severe: ['BURN','BURN - ENGINE','BURN - INTERIOR','WATER/FLOOD',
+           'BIOHAZARD/CHEMICAL','ROLLOVER','ALL OVER','FRAME DAMAGE',
+           'STRIPPED','MISSING/ALTERED VIN','REPLACED VIN'],
+};
+function cpSeverity(d) {
+  const k = String(d || '').toUpperCase();
+  if(CP_SEVERITY.minor.includes(k))  return 'minor';
+  if(CP_SEVERITY.severe.includes(k)) return 'severe';
+  return 'medium';
+}
+
+// ── Сводка по аукциону на дашборде ───────────────────────────────────────────
+async function loadCopartOverview() {
+  const box = document.getElementById('cp-sum');
+  if(!box) return;
+  try {
+    const r = await fetch(`${BASE}/api/copart/overview`);
+    const d = await r.json();
+    const a = d.auctions || {};
+    const cell = (n, l) => `<div class="cp-sum-box">
+        <div class="cp-sum-num">${n ?? 0}</div><div class="cp-sum-lbl">${l}</div></div>`;
+
+    box.innerHTML =
+      cell(d.total, 'всего лотов') +
+      cell(d.new_24h, 'новых за сутки') +
+      cell(a.today, 'торги в сутки') +
+      cell(d.run_drive, 'на ходу') +
+      cell(d.clean, 'чистый документ') +
+      cell(d.buy_now, 'купить сразу');
+
+    // Распределение повреждений — сразу видно, чем забита выдача
+    const dm = d.damages || [];
+    const max = Math.max(1, ...dm.map(x => x.cnt));
+    document.getElementById('cp-sum-damages').innerHTML = dm.length
+      ? dm.map(x => `<div class="cp-bar">
+            <span style="min-width:96px">${esc(cpDamage(x.name))}</span>
+            <span class="cp-bar-track"><span class="cp-bar-fill"
+              style="width:${Math.round(x.cnt / max * 100)}%"></span></span>
+            <b style="color:var(--text)">${x.cnt}</b></div>`).join('')
+      : '';
+
+    document.getElementById('cp-sum-rate').textContent =
+      `Средняя оценка ${d.avg_price ? '$' + d.avg_price.toLocaleString('ru-RU') : '—'}`
+      + `  ·  курс ЦБ ${d.usd_rate} ₽`;
+  } catch {
+    box.innerHTML = '<div class="cp-sum-lbl">Нет данных</div>';
+  }
+}
+
+// ── Лайтбокс ─────────────────────────────────────────────────────────────────
+function openPhoto(url, caption) {
+  const box = document.getElementById('lightbox');
+  document.getElementById('lightbox-img').src = url;
+  document.getElementById('lightbox-cap').textContent = caption || '';
+  box.classList.add('show');
+}
+function closePhoto(e) {
+  if(e && e.target.tagName === 'IMG') return;   // тап по самому фото не закрывает
+  document.getElementById('lightbox').classList.remove('show');
 }
 
 // Тип документа — определяет, можно ли машину восстановить и поставить на учёт
@@ -1173,8 +1326,9 @@ function cpPhoto(l) {
   const k = CP_KEYS[String(l.has_keys || '').toUpperCase()];
   if(k) tg.push(`<span class="cp-tag">${k}</span>`);
   if(l.buy_now_price) tg.push('<span class="cp-tag warn">⚡️ Купить сразу</span>');
+  const cap = esc(`${l.title || ''} · лот ${l.external_id}`);
   return `
-    <div class="cp-photo">
+    <div class="cp-photo" onclick="openPhoto('${esc(l.image_url)}','${cap}')">
       <div class="cp-photo-skel"></div>
       <img src="${esc(l.image_url)}" alt="" loading="lazy"
            onload="this.classList.add('loaded');this.previousElementSibling?.remove()"
@@ -1204,7 +1358,7 @@ function copartCard(l) {
       ${cpPhoto(l)}
       <div class="cp-top">
         <span class="cp-lot">🟡 ЛОТ ${esc(l.external_id)}</span>
-        ${auction ? `<span class="cp-auction ${auction.soon?'soon':''}">🗓 ${auction.text}</span>` : ''}
+        ${auction ? `<span class="cp-auction ${auction.level}">🗓 ${auction.text}</span>` : ''}
       </div>
       <div class="cp-title">${esc(l.title || 'Лот Copart')}</div>
       ${priceBlock}
@@ -1212,7 +1366,7 @@ function copartCard(l) {
       <div class="cp-rows">
         ${specs  ? `<div class="cp-row">📋 <b>${specs}</b></div>` : ''}
         ${l.specs ? `<div class="cp-row">⚙️ ${esc(l.specs)}</div>` : ''}
-        ${damage ? `<div class="cp-row">💥 <span class="cp-damage">${esc(damage)}</span></div>` : ''}
+        ${damage ? `<div class="cp-row">💥 <span class="cp-damage ${cpSeverity(l.damage_description)}">${esc(damage)}</span></div>` : ''}
         ${l.city ? `<div class="cp-row">🏁 <b>${esc(l.city)}</b></div>` : ''}
       </div>
       ${l.vin ? `<div class="cp-vin">VIN ${esc(l.vin)}</div>` : ''}
@@ -1270,6 +1424,7 @@ function toggleCpFlag(name, btn) {
 function renderCopart() {
   const list = document.getElementById('cp-list');
   const items = allCopart;
+  list.className = cpView === 'grid' ? 'cp-grid' : '';
   if(!items.length) {
     // Пусто из-за фильтров — это другая ситуация, чем «лотов вообще нет»
     const filtering = cpSearch || Object.values(cpFlags).some(Boolean);
@@ -1287,7 +1442,43 @@ function renderCopart() {
          </div>`;
     return;
   }
+
+  // При сортировке «торги скоро» плоский список плохо сканируется —
+  // разбиваем заголовками по дню торгов. В сетке разделители не нужны.
+  if(cpSort === 'auction_soon' && cpView !== 'grid') {
+    let html = '', lastDay = null;
+    for(const l of items) {
+      const day = cpDayLabel(l.auction_date);
+      if(day !== lastDay) { html += `<div class="cp-daysep">${day}</div>`; lastDay = day; }
+      html += copartCard(l);
+    }
+    list.innerHTML = html;
+    return;
+  }
   list.innerHTML = items.map(copartCard).join('');
+}
+
+// Заголовок группы: «Сегодня», «Завтра» или дата
+function cpDayLabel(raw) {
+  const d = cpDate(raw);
+  if(!d) return 'Дата торгов не назначена';
+  const day = v => new Date(v).toLocaleDateString('en-CA', {timeZone:'Europe/Moscow'});
+  const today = day(Date.now());
+  const tomorrow = day(Date.now() + 86400000);
+  const target = day(d);
+  if(target === today)    return 'Сегодня';
+  if(target === tomorrow) return 'Завтра';
+  return d.toLocaleDateString('ru-RU',
+    {day:'numeric', month:'long', weekday:'short', timeZone:'Europe/Moscow'});
+}
+
+// Список / сетка 2× — сетка удобнее, когда лотов много и нужен беглый просмотр
+let cpView = localStorage.getItem('cm_cpview') || 'list';
+function toggleCpView(btn) {
+  cpView = cpView === 'grid' ? 'list' : 'grid';
+  localStorage.setItem('cm_cpview', cpView);
+  btn.textContent = cpView === 'grid' ? '☰ Список' : '⊞ Сетка';
+  renderCopart();
 }
 
 // Российские площадки временно свёрнуты за одну кнопку —
@@ -1479,7 +1670,7 @@ function renderDeals(listings) {
     <div class="deal-card" onclick="window.open('${(l.url||'').replace(/'/g,"\'")}','_blank')">
       <div class="deal-badge">#${i+1} дешёвое · ${srcIcon(l.source||'')} ${srcName(l.source||'')}</div>
       <div class="deal-title">${l.title||'Авто'}</div>
-      <div class="deal-price">${fmtP(l.price)}</div>
+      <div class="deal-price">${fmtP(l.price, l)}</div>
       ${l.city?`<div class="deal-city">📍 ${l.city}</div>`:''}
     </div>
   `).join('');
@@ -1525,8 +1716,13 @@ function getPhotoUrl(l) {
 // Copart — стартовая страница: это основной источник
 loadCopart(true);
 loadDashboard();
+loadCopartOverview();
 loadFavorites();
 loadNotifSettings();
+
+// Восстанавливаем сохранённый режим просмотра лотов
+const cpViewBtn = document.getElementById('cp-view-btn');
+if(cpViewBtn) cpViewBtn.textContent = cpView === 'grid' ? '☰ Список' : '⊞ Сетка';
 </script>
 </body>
 </html>

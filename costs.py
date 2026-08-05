@@ -22,6 +22,7 @@ from config import (
     COPART_CUSTOMS_PCT,
     USD_RUB_RATE,
 )
+from rates import cached_rate
 
 
 @dataclass
@@ -56,7 +57,7 @@ def estimate(price_usd: Optional[int], rate: Optional[float] = None) -> Optional
     if not price_usd or price_usd <= 0:
         return None
 
-    rate = rate or USD_RUB_RATE or 1
+    rate = rate or cached_rate() or USD_RUB_RATE or 1
 
     auction_fee = round(price_usd * COPART_AUCTION_FEE_PCT / 100)
     broker_fee  = round(COPART_BROKER_FEE)

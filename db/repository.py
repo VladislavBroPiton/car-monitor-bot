@@ -44,6 +44,18 @@ _MIGRATIONS = (
     "ON seen_listings (source, auction_date, auction_notify_stage)",
     # Поиск повторных выставлений по VIN и поиск лота вручную
     "CREATE INDEX IF NOT EXISTS idx_seen_listings_vin ON seen_listings (vin)",
+    # Несколько марок и моделей в одном фильтре
+    "ALTER TABLE filters ADD COLUMN IF NOT EXISTS brands TEXT[]",
+    "ALTER TABLE filters ADD COLUMN IF NOT EXISTS models TEXT[]",
+    # Здоровье источников
+    """CREATE TABLE IF NOT EXISTS source_health (
+           source    TEXT PRIMARY KEY,
+           zero_runs INTEGER DEFAULT 0,
+           last_ok   TIMESTAMPTZ,
+           alerted   BOOLEAN DEFAULT FALSE
+       )""",
+    "CREATE INDEX IF NOT EXISTS idx_price_history_ext "
+    "ON price_history (source, external_id)",
 )
 
 
@@ -111,6 +123,8 @@ async def create_filter(
     auction_date_from: Optional[datetime.date] = None,
     auction_date_to: Optional[datetime.date] = None,
     kind: str = "ru",
+    brands: Optional[list[str]] = None,
+    models: Optional[list[str]] = None,
     title_groups: Optional[list[str]] = None,
     damage_exclude: Optional[list[str]] = None,
     yards: Optional[list[str]] = None,
@@ -127,9 +141,10 @@ async def create_filter(
              price_from, price_to, mileage_from, mileage_to,
              cities, transmission, body_type, sources,
              auction_date_from, auction_date_to,
-             title_groups, damage_exclude, yards, run_and_drive, buy_now_only)
+             title_groups, damage_exclude, yards, run_and_drive, buy_now_only,
+             brands, models)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-                $18,$19,$20,$21,$22)
+                $18,$19,$20,$21,$22,$23,$24)
         RETURNING *
         """,
         user_id, name, kind, brand, model, year_from, year_to,
@@ -137,6 +152,32 @@ async def create_filter(
         cities, transmission, body_type, sources,
         auction_date_from, auction_date_to,
         title_groups, damage_exclude, yards, run_and_drive, buy_now_only,
+        brands, models,
+    )
+
+
+# Колонки, которые копируются при дублировании фильтра
+FILTER_COPY_COLUMNS = (
+    "user_id", "kind", "brand", "model", "brands", "models",
+    "year_from", "year_to", "price_from", "price_to",
+    "mileage_from", "mileage_to", "cities", "transmission", "body_type",
+    "sources", "auction_date_from", "auction_date_to",
+    "title_groups", "damage_exclude", "yards", "run_and_drive", "buy_now_only",
+)
+
+
+async def duplicate_filter(filter_id: int, user_id: int) -> Optional[asyncpg.Record]:
+    """Скопировать фильтр целиком — чтобы не проходить мастер заново."""
+    pool = await get_pool()
+    cols = ", ".join(FILTER_COPY_COLUMNS)
+    return await pool.fetchrow(
+        f"""
+        INSERT INTO filters (name, {cols})
+        SELECT LEFT(name || ' (копия)', 64), {cols}
+        FROM filters WHERE id = $1 AND user_id = $2
+        RETURNING *
+        """,
+        filter_id, user_id,
     )
 
 
@@ -352,11 +393,70 @@ async def set_notify_stage(external_id: str, stage: int):
     )
 
 
-async def cleanup_old_listings(days: int = 30):
+async def cleanup_old_listings(days: int = 30) -> dict:
+    """
+    Чистим не только объявления, но и их историю цен: раньше price_history
+    рос бесконечно, потому что удаление seen_listings его не касалось.
+    """
     pool = await get_pool()
-    return await pool.execute(
+    listings = await pool.execute(
         f"DELETE FROM seen_listings WHERE created_at < NOW() - INTERVAL '{days} days'"
     )
+    # Осиротевшие записи истории — объявления уже нет
+    orphans = await pool.execute(
+        """DELETE FROM price_history ph
+           WHERE NOT EXISTS (
+               SELECT 1 FROM seen_listings s
+               WHERE s.source = ph.source AND s.external_id = ph.external_id
+           )"""
+    )
+    return {"listings": listings, "price_history": orphans}
+
+
+# ── Здоровье источников ───────────────────────────────────────────────────────
+
+async def record_source_result(source: str, found: int) -> int:
+    """
+    Запомнить итог обхода. Возвращает число подряд идущих пустых прогонов —
+    по нему решаем, не сломался ли парсер после смены формата у площадки.
+    """
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        """
+        INSERT INTO source_health (source, zero_runs, last_ok, alerted)
+        VALUES ($1, CASE WHEN $2 > 0 THEN 0 ELSE 1 END,
+                    CASE WHEN $2 > 0 THEN NOW() ELSE NULL END, FALSE)
+        ON CONFLICT (source) DO UPDATE SET
+            zero_runs = CASE WHEN $2 > 0 THEN 0
+                             ELSE source_health.zero_runs + 1 END,
+            last_ok   = CASE WHEN $2 > 0 THEN NOW()
+                             ELSE source_health.last_ok END,
+            alerted   = CASE WHEN $2 > 0 THEN FALSE
+                             ELSE source_health.alerted END
+        RETURNING zero_runs
+        """,
+        source, found,
+    )
+    return row["zero_runs"] if row else 0
+
+
+async def should_alert(source: str, threshold: int) -> bool:
+    """Пора ли писать владельцу — и не писали ли уже."""
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "SELECT zero_runs, alerted FROM source_health WHERE source = $1", source
+    )
+    if not row or row["alerted"] or row["zero_runs"] < threshold:
+        return False
+    await pool.execute(
+        "UPDATE source_health SET alerted = TRUE WHERE source = $1", source
+    )
+    return True
+
+
+async def get_source_health() -> list[asyncpg.Record]:
+    pool = await get_pool()
+    return await pool.fetch("SELECT * FROM source_health ORDER BY source")
 
 
 # ── Favorites ─────────────────────────────────────────────────────────────────

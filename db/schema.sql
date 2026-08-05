@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS filters (
     -- Поля, которые использует только источник copart
     auction_date_from DATE,
     auction_date_to   DATE,
+    brands         TEXT[],   -- несколько марок в одном фильтре
+    models         TEXT[],   -- несколько моделей
     title_groups   TEXT[],   -- C / S / J — тип документа
     damage_exclude TEXT[],   -- коды исключаемых повреждений: BN, WA, BC…
     yards          TEXT[],   -- штаты площадок: FL, TX…
@@ -138,6 +140,15 @@ CREATE INDEX IF NOT EXISTS idx_seen_listings_auction_date
 -- Для выборки лотов, которым пора напомнить о торгах
 CREATE INDEX IF NOT EXISTS idx_seen_listings_auction_notify
     ON seen_listings (source, auction_date, auction_notify_stage);
+
+-- Здоровье источников: сколько обходов подряд площадка вернула пусто.
+-- Нужно, чтобы смена формата у площадки не проходила незамеченной.
+CREATE TABLE IF NOT EXISTS source_health (
+    source     TEXT PRIMARY KEY,
+    zero_runs  INTEGER DEFAULT 0,
+    last_ok    TIMESTAMPTZ,
+    alerted    BOOLEAN DEFAULT FALSE
+);
 
 CREATE TABLE IF NOT EXISTS notification_settings (
     user_id         BIGINT PRIMARY KEY,

@@ -53,6 +53,10 @@ class SearchFilter:
     # 'ru' — российские площадки; 'copart' — отдельный фильтр аукциона,
     # у которого цена задаётся в долларах, а пробег в милях
     kind: str = "ru"
+    # Несколько марок/моделей в одном фильтре. Если пусто — берутся
+    # одиночные brand/model выше (так работают старые фильтры).
+    brands: list[str] = field(default_factory=list)
+    models: list[str] = field(default_factory=list)
     # ── Поля, которые использует только источник copart ───────────────────────
     auction_date_from: Optional[datetime.date] = None
     auction_date_to: Optional[datetime.date] = None
@@ -89,6 +93,8 @@ class SearchFilter:
             body_type=record["body_type"],
             sources=list(record["sources"] or ["autoru", "drom"]),
             kind=opt("kind") or "ru",
+            brands=list(opt("brands") or []),
+            models=list(opt("models") or []),
             auction_date_from=opt("auction_date_from"),
             auction_date_to=opt("auction_date_to"),
             title_groups=list(opt("title_groups") or []),

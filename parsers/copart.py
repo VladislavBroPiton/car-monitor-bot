@@ -64,6 +64,7 @@ from typing import Optional
 import aiohttp
 
 from config import USD_RUB_RATE
+from rates import cached_rate
 from parsers.base import BaseParser, Listing, SearchFilter
 
 logger = logging.getLogger(__name__)
@@ -259,14 +260,32 @@ def _date_range(f: SearchFilter) -> Optional[str]:
     return f"auction_date_utc:[{lo} TO {hi}]"
 
 
+def selected_brands(f: SearchFilter) -> list[str]:
+    """Марки фильтра: список, если задан, иначе одиночное поле."""
+    if getattr(f, "brands", None):
+        return [b.strip().upper() for b in f.brands if b and b.strip()]
+    return [f.brand.strip().upper()] if f.brand else []
+
+
+def selected_models(f: SearchFilter) -> list[str]:
+    if getattr(f, "models", None):
+        return [m.strip().upper() for m in f.models if m and m.strip()]
+    return [f.model.strip().upper()] if f.model else []
+
+
 def _build_filter(f: SearchFilter, with_model: bool = True) -> dict:
     flt: dict[str, list[str]] = {}
 
-    if f.brand:
-        flt["MAKE"] = [f'lot_make_desc:"{v}"' for v in _make_values(f.brand)]
+    # Значения внутри группы объединяются по ИЛИ — так и работает
+    # «CAMRY или ACCORD или SONATA» одним фильтром
+    brands = selected_brands(f)
+    if brands:
+        variants = [v for b in brands for v in _make_values(b)]
+        flt["MAKE"] = [f'lot_make_desc:"{v}"' for v in dict.fromkeys(variants)]
 
-    if with_model and f.model:
-        flt["MODL"] = [f'lot_model_desc:"{f.model.strip().upper()}"']
+    models = selected_models(f)
+    if with_model and models:
+        flt["MODL"] = [f'lot_model_desc:"{m}"' for m in dict.fromkeys(models)]
 
     if f.year_from or f.year_to:
         flt["YEAR"] = [f"lot_year:{_solr_range(f.year_from, f.year_to)}"]
@@ -430,7 +449,7 @@ def _price_bounds_usd(f: SearchFilter) -> tuple[Optional[int], Optional[int]]:
     """
     if _is_native(f):
         return f.price_from, f.price_to
-    rate = USD_RUB_RATE or 1
+    rate = cached_rate() or USD_RUB_RATE or 1
     lo = int(f.price_from / rate) if f.price_from else None
     hi = int(f.price_to   / rate) if f.price_to   else None
     return lo, hi
@@ -445,11 +464,12 @@ def _matches(listing: Listing, f: SearchFilter, model_client_side: bool) -> bool
     if hi and (effective is None or effective > hi):
         return False
 
-    # Модель не прошла точным facet-фильтром — ищем подстроку в заголовке
-    if model_client_side and f.model:
-        needle = f.model.strip().upper().replace("-", " ")
+    # Модель не прошла точным facet-фильтром — ищем подстроку в заголовке.
+    # Моделей может быть несколько, достаточно совпадения с любой.
+    models = selected_models(f)
+    if model_client_side and models:
         haystack = listing.title.upper().replace("-", " ")
-        if needle not in haystack:
+        if not any(m.replace("-", " ") in haystack for m in models):
             return False
 
     # Buy It Now отсеиваем здесь, если группу FETI занял фильтр «на ходу»
@@ -591,8 +611,9 @@ class CopartParser(BaseParser):
         if not _is_native(f) and "copart" not in f.sources:
             return []
 
-        if f.brand and f.brand.strip().upper() in MAKES_NOT_ON_COPART:
-            logger.info(f"copart: марка «{f.brand}» на аукционе не представлена, "
+        brands = selected_brands(f)
+        if brands and all(b in MAKES_NOT_ON_COPART for b in brands):
+            logger.info(f"copart: марок {brands} на аукционе нет, "
                         f"фильтр «{f.name}» пропущен")
             return []
 
@@ -604,8 +625,8 @@ class CopartParser(BaseParser):
             # Названия моделей у Copart свои (CRUZE, но «LAND CRUISER» → «LANDCRUISER»
             # и т.п.) — если точное совпадение ничего не дало, ищем по марке
             # и отсеиваем по заголовку уже у себя
-            if f.model and not raw_lots:
-                logger.info(f"copart: модель «{f.model}» не найдена в справочнике, "
+            if selected_models(f) and not raw_lots:
+                logger.info(f"copart: модели {selected_models(f)} нет в справочнике, "
                             f"фильтруем по заголовку")
                 raw_lots = await _fetch_pages(session, f, with_model=False)
                 model_client_side = True
@@ -640,16 +661,18 @@ class CopartParser(BaseParser):
         matched — сколько из первой сотни прошло наши фильтры цены и модели
         sample  — примеры лотов
         """
-        if f.brand and f.brand.strip().upper() in MAKES_NOT_ON_COPART:
-            return {"total": 0, "matched": 0, "sample": [],
-                    "note": f"Марки «{f.brand}» на аукционе нет — это рынок США"}
+        brands = selected_brands(f)
+        if brands and all(b in MAKES_NOT_ON_COPART for b in brands):
+            return {"total": 0, "matched": 0, "checked": 0, "sample": [],
+                    "note": f"Марок {", ".join(brands)} на аукционе нет — "
+                            f"это рынок США"}
 
         async with aiohttp.ClientSession() as session:
             results = await _post(session, _build_payload(f, 0, with_model=True))
             model_client_side = False
 
             # Точного совпадения по модели нет — пробуем по марке с отбором у себя
-            if f.model and results is not None and not (results.get("content") or []):
+            if selected_models(f) and results is not None and not (results.get("content") or []):
                 results = await _post(session, _build_payload(f, 0, with_model=False))
                 model_client_side = True
 
