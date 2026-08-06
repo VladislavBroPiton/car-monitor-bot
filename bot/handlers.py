@@ -50,6 +50,7 @@ from parsers.copart import (
     CopartParser,
     fetch_makes,
     fetch_models,
+    fetch_models_multi,
     FETCH_LIMIT,
 )
 from parsers.base import SearchFilter
@@ -2315,27 +2316,29 @@ async def _show_models(msg, state: FSMContext, page: int = 0, edit: bool = False
                    simple_kb)
         return
 
-    # Модели показываем по первой выбранной марке: у разных марок
-    # справочники разные, смешивать их в одном списке нельзя
-    models = await fetch_models(brands[0])
+    # Модели собираем по всем выбранным маркам: фильтр по модели
+    # применяется ко всем маркам сразу, поэтому и выбирать надо из всех
+    models = await fetch_models_multi(brands)
     if not models:
         await send(_cp_step(3, "Шаг 3 — Модель",
-                            f"Для <b>{brands[0]}</b> список моделей не пришёл. "
-                            f"Отправь текстом или пропусти."),
+                            f"Для <b>{', '.join(brands)}</b> список моделей "
+                            f"не пришёл. Отправь текстом или пропусти."),
                    simple_kb)
         return
 
     query = data.get("md_query", "")
     shown = search_catalog(models, query)
 
-    title = f"Шаг 3 — Модель {brands[0]}"
+    title = ("Шаг 3 — Модель " + brands[0]) if len(brands) == 1 else "Шаг 3 — Модели"
     hint = (f"{len(models)} моделей на аукционе. "
             f"<b>Можно отметить несколько.</b>\n"
             f"🔍 <i>Не листай — жми «Поиск по названию» "
             f"или просто напиши пару букв в поле сообщений внизу</i>")
     if len(brands) > 1:
-        hint += (f"\n<i>Марок выбрано {len(brands)}; список моделей показан "
-                 f"для {brands[0]}. Для остальных марок модель не ограничивается.</i>")
+        hint += (f"\n\n<i>Марок выбрано {len(brands)} — "
+                 f"{', '.join(brands)}. В списке модели их всех: "
+                 f"отметь по одной от каждой марки, например "
+                 f"CRUZE и CX-5.</i>")
     hint += _search_hint(query, len(shown), len(models))
     if picked:
         hint += f"\n\nВыбрано: <b>{', '.join(picked)}</b>"
@@ -2574,7 +2577,7 @@ async def cpw_model_pick(call: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     brands = list(data.get("brands", []))
     # Как и с марками — индекс из отфильтрованного поиском списка
-    models = search_catalog(await fetch_models(brands[0] if brands else ""),
+    models = search_catalog(await fetch_models_multi(brands),
                             data.get("md_query", ""))
     idx = int(call.data.split(":")[1])
     if not (0 <= idx < len(models)):
@@ -2632,10 +2635,11 @@ async def cpw_model(message: Message, state: FSMContext):
         return
 
     await state.update_data(md_query=raw)
-    catalog = await fetch_models(brands[0])
+    catalog = await fetch_models_multi(brands)
     if not search_catalog(catalog, raw):
         await message.answer(
-            f"🔍 <b>{raw.upper()}</b> среди моделей {brands[0]} не нашлось.",
+            f"🔍 <b>{raw.upper()}</b> среди моделей "
+            f"{', '.join(brands)} не нашлось.",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text=f"Всё равно искать «{raw.upper()}»",

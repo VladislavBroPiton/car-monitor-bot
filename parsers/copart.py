@@ -701,6 +701,23 @@ async def fetch_models(make: str) -> list[tuple[str, int]]:
     return await _fetch_facet(f"MODL:{make}", "MODL", {"MAKE": values})
 
 
+async def fetch_models_multi(makes: list[str]) -> list[tuple[str, int]]:
+    """
+    Модели сразу по нескольким маркам, одним списком.
+
+    Нужно потому, что группа MODL применяется ко всем выбранным маркам
+    разом: выбрав «Круз» при марках Chevrolet и Mazda, пользователь
+    получил бы только Chevrolet. Значит, и выбирать он должен из моделей
+    всех своих марок, а не одной.
+    """
+    merged: dict[str, int] = {}
+    for make in makes or []:
+        for name, count in await fetch_models(make):
+            # Одноимённые модели у разных марок — берём большее число лотов
+            merged[name] = max(merged.get(name, 0), count)
+    return sorted(merged.items(), key=lambda x: -x[1])
+
+
 # ── Парсер ────────────────────────────────────────────────────────────────────
 
 class CopartParser(BaseParser):

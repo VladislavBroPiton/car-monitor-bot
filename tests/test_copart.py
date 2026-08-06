@@ -232,6 +232,39 @@ def test_catalog_search():
     assert len(search_catalog(catalog, "SILVERADO")) == 1
 
 
+def test_models_merged_across_brands():
+    """
+    При нескольких марках модели должны собираться из всех справочников:
+    группа MODL применяется ко всем маркам сразу, поэтому выбирать
+    пользователь должен из общего списка, а не из первой марки.
+    """
+    import asyncio
+    import parsers.copart as cp
+
+    catalogs = {
+        "CHEVROLET": [("CRUZE", 2488), ("MALIBU", 5023), ("3", 10)],
+        "MAZDA":     [("CX-5", 1866), ("CX-9", 400), ("3", 900)],
+    }
+
+    async def fake_fetch_models(make):
+        return catalogs.get(make, [])
+
+    original = cp.fetch_models
+    cp.fetch_models = fake_fetch_models
+    try:
+        merged = asyncio.run(cp.fetch_models_multi(["CHEVROLET", "MAZDA"]))
+    finally:
+        cp.fetch_models = original
+
+    names = [n for n, _ in merged]
+    assert "CRUZE" in names and "CX-5" in names, "модели обеих марок обязаны быть"
+    # Одноимённая модель встречается у обеих — берём большее число лотов
+    assert dict(merged)["3"] == 900
+    # Порядок — по убыванию количества
+    counts = [c for _, c in merged]
+    assert counts == sorted(counts, reverse=True)
+
+
 def test_fetch_limit_matches_paging():
     """FETCH_LIMIT показывается пользователю в предпросмотре — не должен разъехаться."""
     assert FETCH_LIMIT == PAGE_SIZE * MAX_PAGES == 300
