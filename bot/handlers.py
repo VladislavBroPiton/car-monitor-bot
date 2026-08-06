@@ -2185,7 +2185,7 @@ CATALOG_PAGE = 12
 
 def _catalog_kb(items: list, page: int, pick: str, nav: str, any_cb: str,
                 selected: list[str] = None, done_cb: str = None,
-                back_cb: str = None) -> InlineKeyboardMarkup:
+                back_cb: str = None, clear_cb: str = None) -> InlineKeyboardMarkup:
     """
     Страница справочника: кнопки «НАЗВАНИЕ · N» по две в ряд.
     Отмеченные помечаются галочкой — можно выбрать несколько.
@@ -2217,6 +2217,10 @@ def _catalog_kb(items: list, page: int, pick: str, nav: str, any_cb: str,
             nav_row.append(InlineKeyboardButton(text="▶️", callback_data=f"{nav}:{page+1}"))
         rows.append(nav_row)
 
+    if clear_cb:
+        rows.append([InlineKeyboardButton(text="🔍✕ Показать все",
+                                          callback_data=clear_cb)])
+
     if selected and done_cb:
         rows.append([InlineKeyboardButton(
             text=f"▶️ Далее ({len(selected)} выбрано)", callback_data=done_cb)])
@@ -2228,19 +2232,50 @@ def _catalog_kb(items: list, page: int, pick: str, nav: str, any_cb: str,
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def search_catalog(items: list, query: str) -> list:
+    """
+    Отбор по подстроке. Совпадения с начала названия идут первыми:
+    по запросу «CR» сначала CRUZE и CR-V, а потом уже MICRO CRUISER.
+    """
+    q = (query or "").strip().upper()
+    if not q:
+        return items
+    starts = [it for it in items if it[0].upper().startswith(q)]
+    inside = [it for it in items if q in it[0].upper()
+              and not it[0].upper().startswith(q)]
+    return starts + inside
+
+
+def _search_hint(query: str, found: int, total: int) -> str:
+    """Строка о состоянии поиска — чтобы было видно, что список отфильтрован."""
+    if query:
+        return (f"\n🔍 Поиск: <b>{query}</b> — найдено {found} из {total}"
+                if found else
+                f"\n🔍 По запросу <b>{query}</b> ничего не нашлось")
+    return ""
+
+
 async def _show_makes(msg, state: FSMContext, page: int = 0, edit: bool = False):
-    data  = await state.get_data()
+    data   = await state.get_data()
     picked = list(data.get("brands", []))
+    query  = data.get("mk_query", "")
+
     makes = await fetch_makes()
+    shown = search_catalog(makes, query)
+
     hint = (f"Список берётся прямо с аукциона — {len(makes)} марок, "
             f"рядом число лотов.\n"
-            f"<b>Можно отметить несколько.</b> Или отправь текстом: "
-            f"<code>TOYOTA</code>")
+            f"<b>Можно отметить несколько.</b>\n"
+            f"🔍 <i>Чтобы не листать — напиши пару букв, например "
+            f"<code>toy</code></i>")
+    hint += _search_hint(query, len(shown), len(makes))
     if picked:
         hint += f"\n\nВыбрано: <b>{', '.join(picked)}</b>"
+
+    kb = _catalog_kb(shown, page, "cpw_mk", "cpw_mk_pg", "cpw_mk_any",
+                     selected=picked, done_cb="cpw_mk_done",
+                     clear_cb="cpw_mk_clear" if query else None)
     text = _cp_step(2, "Шаг 2 — Марка", hint)
-    kb = _catalog_kb(makes, page, "cpw_mk", "cpw_mk_pg", "cpw_mk_any",
-                     selected=picked, done_cb="cpw_mk_done")
     if edit:
         await msg.edit_text(text, parse_mode="HTML", reply_markup=kb)
     else:
@@ -2279,18 +2314,26 @@ async def _show_models(msg, state: FSMContext, page: int = 0, edit: bool = False
                    simple_kb)
         return
 
+    query = data.get("md_query", "")
+    shown = search_catalog(models, query)
+
     title = f"Шаг 3 — Модель {brands[0]}"
-    hint = f"{len(models)} моделей на аукционе. <b>Можно отметить несколько.</b>"
+    hint = (f"{len(models)} моделей на аукционе. "
+            f"<b>Можно отметить несколько.</b>\n"
+            f"🔍 <i>Чтобы не листать — напиши пару букв, например "
+            f"<code>cru</code></i>")
     if len(brands) > 1:
         hint += (f"\n<i>Марок выбрано {len(brands)}; список моделей показан "
                  f"для {brands[0]}. Для остальных марок модель не ограничивается.</i>")
+    hint += _search_hint(query, len(shown), len(models))
     if picked:
         hint += f"\n\nВыбрано: <b>{', '.join(picked)}</b>"
 
     await send(_cp_step(3, title, hint),
-               _catalog_kb(models, page, "cpw_md", "cpw_md_pg", "cpw_md_any",
+               _catalog_kb(shown, page, "cpw_md", "cpw_md_pg", "cpw_md_any",
                            selected=picked, done_cb="cpw_md_done",
-                           back_cb="cpw_back:brand"))
+                           back_cb="cpw_back:brand",
+                           clear_cb="cpw_md_clear" if query else None))
 
 
 # Куда возвращает «Назад» с каждого шага. Раньше ошибка на шаге 4
@@ -2373,14 +2416,16 @@ async def cpw_make_page(call: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("cpw_mk:"), StateFilter(CopartForm.brand))
 async def cpw_make_pick(call: CallbackQuery, state: FSMContext):
     """Отметить марку. Справочник закэширован — индекс разрешаем без сети."""
-    makes = await fetch_makes()
+    data = await state.get_data()
+    # Индекс относится к тому списку, из которого построены кнопки:
+    # при активном поиске он отфильтрован
+    makes = search_catalog(await fetch_makes(), data.get("mk_query", ""))
     idx = int(call.data.split(":")[1])
     if not (0 <= idx < len(makes)):
         await call.answer()
         return
 
     name = makes[idx][0]
-    data = await state.get_data()
     picked = list(data.get("brands", []))
     if name in picked:
         picked.remove(name)
@@ -2406,13 +2451,59 @@ async def cpw_make_any(call: CallbackQuery, state: FSMContext):
     await call.answer()
 
 
+@router.callback_query(F.data == "cpw_mk_clear", StateFilter(CopartForm.brand))
+async def cpw_make_clear(call: CallbackQuery, state: FSMContext):
+    await state.update_data(mk_query="")
+    await _show_makes(call.message, state, 0, edit=True)
+    await call.answer("Показаны все марки")
+
+
 @router.message(StateFilter(CopartForm.brand))
 async def cpw_brand_text(message: Message, state: FSMContext):
-    raw = message.text.strip().upper()
-    # Через запятую можно перечислить сразу несколько
-    brands = [] if raw == "-" else [b.strip() for b in raw.split(",") if b.strip()]
-    await state.update_data(brands=brands)
-    await _cpw_after_brands(message, state, edit=False)
+    """
+    Текст на шаге марки — это поиск по справочнику, а не готовое значение:
+    марок 400, листать их постранично мучительно.
+    Перечисление через запятую по-прежнему задаёт марки напрямую.
+    """
+    raw = message.text.strip()
+
+    if raw == "-":
+        await state.update_data(brands=[], mk_query="")
+        await _cpw_after_brands(message, state, edit=False)
+        return
+
+    if "," in raw:
+        brands = [b.strip().upper() for b in raw.split(",") if b.strip()]
+        await state.update_data(brands=brands, mk_query="")
+        await _cpw_after_brands(message, state, edit=False)
+        return
+
+    await state.update_data(mk_query=raw)
+    makes = await fetch_makes()
+    if not search_catalog(makes, raw):
+        # Такой марки на аукционе нет — но пользователь мог знать лучше
+        await message.answer(
+            f"🔍 <b>{raw.upper()}</b> в справочнике аукциона не нашлось.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=f"Всё равно искать «{raw.upper()}»",
+                                      callback_data="cpw_mk_force")],
+                [InlineKeyboardButton(text="🔍✕ Показать все марки",
+                                      callback_data="cpw_mk_clear")],
+            ]),
+        )
+        return
+    await _show_makes(message, state, 0, edit=False)
+
+
+@router.callback_query(F.data == "cpw_mk_force", StateFilter(CopartForm.brand))
+async def cpw_make_force(call: CallbackQuery, state: FSMContext):
+    """Взять введённое как марку, даже если её нет в справочнике."""
+    data = await state.get_data()
+    raw = (data.get("mk_query") or "").strip().upper()
+    await state.update_data(brands=[raw] if raw else [], mk_query="")
+    await _cpw_after_brands(call.message, state, edit=True)
+    await call.answer()
 
 
 async def _cpw_after_brands(msg, state: FSMContext, edit: bool):
@@ -2449,7 +2540,9 @@ async def cpw_model_page(call: CallbackQuery, state: FSMContext):
 async def cpw_model_pick(call: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     brands = list(data.get("brands", []))
-    models = await fetch_models(brands[0] if brands else "")
+    # Как и с марками — индекс из отфильтрованного поиском списка
+    models = search_catalog(await fetch_models(brands[0] if brands else ""),
+                            data.get("md_query", ""))
     idx = int(call.data.split(":")[1])
     if not (0 <= idx < len(models)):
         await call.answer()
@@ -2480,12 +2573,56 @@ async def cpw_model_any(call: CallbackQuery, state: FSMContext):
     await call.answer()
 
 
+@router.callback_query(F.data == "cpw_md_clear", StateFilter(CopartForm.model))
+async def cpw_model_clear(call: CallbackQuery, state: FSMContext):
+    await state.update_data(md_query="")
+    await _show_models(call.message, state, 0, edit=True)
+    await call.answer("Показаны все модели")
+
+
 @router.message(StateFilter(CopartForm.model))
 async def cpw_model(message: Message, state: FSMContext):
-    raw = message.text.strip().upper()
-    models = [] if raw == "-" else [m.strip() for m in raw.split(",") if m.strip()]
-    await state.update_data(models=models)
-    await _cpw_next_after_model(message, state, edit=False)
+    """Текст на шаге модели ищет по справочнику — их бывает под 400."""
+    raw = message.text.strip()
+    data = await state.get_data()
+    brands = list(data.get("brands", []))
+
+    if raw == "-":
+        await state.update_data(models=[], md_query="")
+        await _cpw_next_after_model(message, state, edit=False)
+        return
+
+    if "," in raw or not brands:
+        models = [m.strip().upper() for m in raw.split(",") if m.strip()]
+        await state.update_data(models=models, md_query="")
+        await _cpw_next_after_model(message, state, edit=False)
+        return
+
+    await state.update_data(md_query=raw)
+    catalog = await fetch_models(brands[0])
+    if not search_catalog(catalog, raw):
+        await message.answer(
+            f"🔍 <b>{raw.upper()}</b> среди моделей {brands[0]} не нашлось.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=f"Всё равно искать «{raw.upper()}»",
+                                      callback_data="cpw_md_force")],
+                [InlineKeyboardButton(text="🔍✕ Показать все модели",
+                                      callback_data="cpw_md_clear")],
+            ]),
+        )
+        return
+    await _show_models(message, state, 0, edit=False)
+
+
+@router.callback_query(F.data == "cpw_md_force", StateFilter(CopartForm.model))
+async def cpw_model_force(call: CallbackQuery, state: FSMContext):
+    """Взять введённое как модель — парсер отберёт по названию лота."""
+    data = await state.get_data()
+    raw = (data.get("md_query") or "").strip().upper()
+    await state.update_data(models=[raw] if raw else [], md_query="")
+    await _cpw_next_after_model(call.message, state, edit=True)
+    await call.answer()
 
 
 async def _cpw_next_after_model(msg, state: FSMContext, edit: bool):

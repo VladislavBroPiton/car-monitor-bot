@@ -211,6 +211,27 @@ def test_facet_values_missing_group():
     assert _facet_values({}, "MAKE") == []
 
 
+def test_catalog_search():
+    """
+    Поиск по справочнику марок и моделей: совпадения с начала названия
+    должны идти первыми, иначе по «cru» сверху окажется MICRO CRUISER,
+    а нужная CRUZE уедет вниз.
+    """
+    os.environ.setdefault("WEBHOOK_HOST", "https://example.com")
+    from bot.handlers import search_catalog
+
+    catalog = [("SILVERADO", 8185), ("CRUZE", 2488),
+               ("CRUZE LIMITED", 900), ("MICRO CRUISER", 5)]
+
+    found = search_catalog(catalog, "cru")
+    assert [n for n, _ in found] == ["CRUZE", "CRUZE LIMITED", "MICRO CRUISER"]
+
+    assert search_catalog(catalog, "") == catalog        # пустой запрос — весь список
+    assert search_catalog(catalog, "   ") == catalog
+    assert search_catalog(catalog, "ZZZ") == []          # нет совпадений
+    assert len(search_catalog(catalog, "SILVERADO")) == 1
+
+
 def test_fetch_limit_matches_paging():
     """FETCH_LIMIT показывается пользователю в предпросмотре — не должен разъехаться."""
     assert FETCH_LIMIT == PAGE_SIZE * MAX_PAGES == 300
