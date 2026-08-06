@@ -832,6 +832,116 @@ def _step(n: int, total: int, title: str, hint: str, skip: bool = True) -> str:
     )
 
 
+# ── Кто я и полный сброс ──────────────────────────────────────────────────────
+
+@router.message(Command("whoami"))
+async def cmd_whoami(message: Message):
+    """
+    Свой Telegram id и что за ним числится.
+
+    Нужен, когда бот показывает пустой список фильтров, а уведомления
+    приходят: значит, фильтры принадлежат другому аккаунту.
+    """
+    user_id = message.from_user.id
+    if not await _is_owner(user_id):
+        return
+
+    pool = await get_pool()
+    mine = await pool.fetchval(
+        "SELECT COUNT(*) FROM filters WHERE user_id = $1", user_id)
+    seen = await pool.fetchval(
+        "SELECT COUNT(*) FROM user_seen WHERE user_id = $1", user_id)
+    total = await pool.fetchval("SELECT COUNT(*) FROM filters")
+    others = await pool.fetch(
+        """SELECT user_id, COUNT(*) AS cnt FROM filters
+           WHERE user_id <> $1 GROUP BY user_id""", user_id)
+
+    lines = [
+        "🪪 <b>Это ты</b>",
+        f"<code>{'─' * 24}</code>",
+        f"Telegram id: <code>{user_id}</code>",
+        f"Роль: {'администратор' if user_id in await get_admin_ids() else 'пользователь'}",
+        "",
+        f"Твоих фильтров: <b>{mine}</b>",
+        f"Прислано объявлений: <b>{seen}</b>",
+    ]
+    if others:
+        lines.append("")
+        lines.append("⚠️ <b>Фильтры других аккаунтов</b>")
+        for o in others:
+            lines.append(f"   <code>{o['user_id']}</code> — {o['cnt']} шт.")
+        lines.append("")
+        lines.append("<i>Они продолжают работать и слать уведомления "
+                     "своему владельцу. Управлять ими можно только "
+                     "с того аккаунта.</i>")
+    lines.append(f"\n<i>Всего фильтров в базе: {total}</i>")
+
+    await message.answer("\n".join(lines), parse_mode="HTML")
+
+
+@router.message(Command("reset"))
+async def cmd_reset(message: Message):
+    """Удалить все свои фильтры и историю — начать с чистого листа."""
+    user_id = message.from_user.id
+    if not await _is_owner(user_id):
+        return
+
+    pool = await get_pool()
+    filters = await pool.fetchval(
+        "SELECT COUNT(*) FROM filters WHERE user_id = $1", user_id)
+    seen = await pool.fetchval(
+        "SELECT COUNT(*) FROM user_seen WHERE user_id = $1", user_id)
+
+    if not filters and not seen:
+        await message.answer("Сбрасывать нечего — фильтров и истории нет.")
+        return
+
+    await message.answer(
+        f"🧹 <b>Полный сброс</b>\n\n"
+        f"Удалю у аккаунта <code>{user_id}</code>:\n"
+        f"• фильтров: <b>{filters}</b>\n"
+        f"• записей истории: <b>{seen}</b>\n"
+        f"• избранное\n\n"
+        f"<i>Каталог лотов и данные других аккаунтов не тронутся. "
+        f"После сброса все подходящие лоты придут заново.</i>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🧹 Да, сбросить всё",
+                                  callback_data="reset_confirm")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="main_menu")],
+        ]),
+    )
+
+
+@router.callback_query(F.data == "reset_confirm")
+async def cb_reset_confirm(call: CallbackQuery):
+    user_id = call.from_user.id
+    if not await _is_owner(user_id):
+        await call.answer("⛔", show_alert=True)
+        return
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("DELETE FROM filters WHERE user_id = $1", user_id)
+            await conn.execute("DELETE FROM user_seen WHERE user_id = $1", user_id)
+            await conn.execute("DELETE FROM favorites WHERE user_id = $1", user_id)
+
+    await call.message.edit_text(
+        "🧹 <b>Сброшено.</b>\n\n"
+        "Создай новый фильтр — при следующем обходе придут все подходящие лоты.\n\n"
+        "<i>Обход идёт раз в 14 минут. Чтобы не ждать, открой "
+        "/run_now на сайте бота.</i>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➕🟡 Новый фильтр Copart",
+                                  callback_data="copart_add")],
+            [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
+        ]),
+    )
+    await call.answer("Готово")
+
+
 # ── Управление пользователями (для администратора) ────────────────────────────
 
 @router.message(Command("users"))

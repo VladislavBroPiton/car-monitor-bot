@@ -236,12 +236,22 @@ def create_scheduler_router(bot: Bot) -> APIRouter:
                 "SELECT COUNT(*) FROM user_seen WHERE user_id = $1", f.user_id)
             out.append(item)
 
+        # Кто чем владеет — по этому видно, почему бот показывает пустой
+        # список, а уведомления при этом приходят
+        owners = await pool.fetch(
+            """SELECT f.user_id,
+                      COUNT(*) AS фильтров,
+                      (SELECT COUNT(*) FROM user_seen us
+                       WHERE us.user_id = f.user_id) AS отправлено
+               FROM filters f GROUP BY f.user_id ORDER BY f.user_id"""
+        )
         totals = {
             "активных_фильтров": len(records),
             "всего_фильтров": await pool.fetchval("SELECT COUNT(*) FROM filters"),
             "лотов_в_каталоге": await pool.fetchval(
                 "SELECT COUNT(*) FROM seen_listings WHERE source = 'copart'"),
             "пользователей": await pool.fetchval("SELECT COUNT(*) FROM users"),
+            "владельцы": [dict(o) for o in owners],
         }
         return {"итого": totals, "фильтры": out}
 
