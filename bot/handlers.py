@@ -13,6 +13,7 @@ from aiogram.types import (
     InlineQuery,
     InlineQueryResultArticle,
     InputTextMessageContent,
+    ForceReply,
 )
 
 from config import OWNER_ID, WEBHOOK_HOST
@@ -2185,7 +2186,8 @@ CATALOG_PAGE = 12
 
 def _catalog_kb(items: list, page: int, pick: str, nav: str, any_cb: str,
                 selected: list[str] = None, done_cb: str = None,
-                back_cb: str = None, clear_cb: str = None) -> InlineKeyboardMarkup:
+                back_cb: str = None, clear_cb: str = None,
+                find_cb: str = None) -> InlineKeyboardMarkup:
     """
     Страница справочника: кнопки «НАЗВАНИЕ · N» по две в ряд.
     Отмеченные помечаются галочкой — можно выбрать несколько.
@@ -2217,9 +2219,17 @@ def _catalog_kb(items: list, page: int, pick: str, nav: str, any_cb: str,
             nav_row.append(InlineKeyboardButton(text="▶️", callback_data=f"{nav}:{page+1}"))
         rows.append(nav_row)
 
+    # Поиск — отдельной кнопкой: в inline-клавиатуре нет поля ввода,
+    # и подсказки «напиши пару букв» пользователь просто не замечает
+    search_row = []
+    if find_cb:
+        search_row.append(InlineKeyboardButton(text="🔍 Поиск по названию",
+                                               callback_data=find_cb))
     if clear_cb:
-        rows.append([InlineKeyboardButton(text="🔍✕ Показать все",
-                                          callback_data=clear_cb)])
+        search_row.append(InlineKeyboardButton(text="✕ Сбросить",
+                                               callback_data=clear_cb))
+    if search_row:
+        rows.append(search_row)
 
     if selected and done_cb:
         rows.append([InlineKeyboardButton(
@@ -2266,15 +2276,16 @@ async def _show_makes(msg, state: FSMContext, page: int = 0, edit: bool = False)
     hint = (f"Список берётся прямо с аукциона — {len(makes)} марок, "
             f"рядом число лотов.\n"
             f"<b>Можно отметить несколько.</b>\n"
-            f"🔍 <i>Чтобы не листать — напиши пару букв, например "
-            f"<code>toy</code></i>")
+            f"🔍 <i>Не листай — жми «Поиск по названию» "
+            f"или просто напиши пару букв в поле сообщений внизу</i>")
     hint += _search_hint(query, len(shown), len(makes))
     if picked:
         hint += f"\n\nВыбрано: <b>{', '.join(picked)}</b>"
 
     kb = _catalog_kb(shown, page, "cpw_mk", "cpw_mk_pg", "cpw_mk_any",
                      selected=picked, done_cb="cpw_mk_done",
-                     clear_cb="cpw_mk_clear" if query else None)
+                     clear_cb="cpw_mk_clear" if query else None,
+                     find_cb="cpw_mk_find")
     text = _cp_step(2, "Шаг 2 — Марка", hint)
     if edit:
         await msg.edit_text(text, parse_mode="HTML", reply_markup=kb)
@@ -2320,8 +2331,8 @@ async def _show_models(msg, state: FSMContext, page: int = 0, edit: bool = False
     title = f"Шаг 3 — Модель {brands[0]}"
     hint = (f"{len(models)} моделей на аукционе. "
             f"<b>Можно отметить несколько.</b>\n"
-            f"🔍 <i>Чтобы не листать — напиши пару букв, например "
-            f"<code>cru</code></i>")
+            f"🔍 <i>Не листай — жми «Поиск по названию» "
+            f"или просто напиши пару букв в поле сообщений внизу</i>")
     if len(brands) > 1:
         hint += (f"\n<i>Марок выбрано {len(brands)}; список моделей показан "
                  f"для {brands[0]}. Для остальных марок модель не ограничивается.</i>")
@@ -2333,7 +2344,8 @@ async def _show_models(msg, state: FSMContext, page: int = 0, edit: bool = False
                _catalog_kb(shown, page, "cpw_md", "cpw_md_pg", "cpw_md_any",
                            selected=picked, done_cb="cpw_md_done",
                            back_cb="cpw_back:brand",
-                           clear_cb="cpw_md_clear" if query else None))
+                           clear_cb="cpw_md_clear" if query else None,
+                           find_cb="cpw_md_find"))
 
 
 # Куда возвращает «Назад» с каждого шага. Раньше ошибка на шаге 4
@@ -2448,6 +2460,27 @@ async def cpw_make_done(call: CallbackQuery, state: FSMContext):
 async def cpw_make_any(call: CallbackQuery, state: FSMContext):
     await state.update_data(brands=[])
     await _cpw_after_brands(call.message, state, edit=True)
+    await call.answer()
+
+
+@router.callback_query(F.data.in_({"cpw_mk_find", "cpw_md_find"}))
+async def cpw_open_search(call: CallbackQuery, state: FSMContext):
+    """
+    Открыть поиск. У inline-клавиатуры нет поля ввода, поэтому просим
+    Telegram открыть обычное поле сообщений с подсказкой — так понятно,
+    куда писать.
+    """
+    is_make = call.data == "cpw_mk_find"
+    example = "toy" if is_make else "cru"
+    what = "марки" if is_make else "модели"
+
+    await call.message.answer(
+        f"🔍 <b>Поиск {what}</b>\n\n"
+        f"Отправь сообщением пару букв — например <code>{example}</code>. "
+        f"Покажу подходящие.",
+        parse_mode="HTML",
+        reply_markup=ForceReply(input_field_placeholder=f"например: {example}"),
+    )
     await call.answer()
 
 
