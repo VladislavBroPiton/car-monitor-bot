@@ -411,6 +411,7 @@ class NotifSettings(BaseModel):
     quiet_from:         Optional[int]  = 23
     quiet_to:           Optional[int]  = 8
     notify_price_drop:  Optional[bool] = True
+    auto_clean_sold:    Optional[bool] = False
 
 
 @router.get("/settings")

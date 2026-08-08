@@ -6,7 +6,8 @@ from aiogram.enums import ParseMode
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
 
 import datetime
-from config import OWNER_ID, USD_RUB_RATE, MAX_NOTIFY_PER_RUN, WEBHOOK_HOST
+from config import (OWNER_ID, USD_RUB_RATE, MAX_NOTIFY_PER_RUN,
+                    WEBHOOK_HOST, SOLD_CLEAN_DAYS)
 from parsers.base import Listing
 from parsers.copart import damage_ru, title_ru, keys_ru
 from db.repository import (
@@ -417,6 +418,36 @@ async def process_listings(
             logger.error(f"notifier: не отправлена сводка: {e}")
 
     return new_count
+
+
+async def notify_cleaned(bot: Bot, removed: dict[int, int]) -> int:
+    """
+    Сообщить, что отторгованные лоты убраны.
+
+    Сообщение служебное, поэтому уходит без звука: пользователь ничего
+    не пропустил и реагировать не нужно — просто отчёт об уборке.
+    """
+    sent = 0
+    for user_id, count in removed.items():
+        if not count:
+            continue
+        word = ("лот" if count % 10 == 1 and count % 100 != 11 else
+                "лота" if 2 <= count % 10 <= 4 and not 12 <= count % 100 <= 14 else
+                "лотов")
+        try:
+            await bot.send_message(
+                chat_id=user_id,
+                text=(f"🧹 Убрал {count} {word} — торги по ним прошли "
+                      f"больше {SOLD_CLEAN_DAYS} дней назад.\n\n"
+                      f"<i>Автоочистка включена в настройках, там же "
+                      f"её можно выключить.</i>"),
+                parse_mode=ParseMode.HTML,
+                disable_notification=True,      # без звука
+            )
+            sent += 1
+        except Exception as e:
+            logger.error(f"уборка: сообщение не отправлено {user_id}: {e}")
+    return sent
 
 
 # ── Напоминания о торгах ──────────────────────────────────────────────────────

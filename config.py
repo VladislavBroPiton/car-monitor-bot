@@ -16,6 +16,10 @@ SCRAPER_API_KEY: str = os.getenv("SCRAPER_API_KEY", "")
 # Курс доллара для Copart: лоты в USD, а границы цены в фильтрах — в рублях
 USD_RUB_RATE: float = float(os.getenv("USD_RUB_RATE", "90"))
 
+# Через сколько дней после торгов лот считается отторгованным и убирается
+# из списка — если пользователь включил автоочистку в настройках.
+SOLD_CLEAN_DAYS: int = int(os.getenv("SOLD_CLEAN_DAYS", "3"))
+
 # Сколько объявлений максимум слать в чат за один обход одного фильтра.
 # Первый прогон нового фильтра иначе высыпает сотни карточек подряд.
 MAX_NOTIFY_PER_RUN: int = int(os.getenv("MAX_NOTIFY_PER_RUN", "15"))

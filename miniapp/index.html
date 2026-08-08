@@ -570,6 +570,16 @@ body.light-force{--bg:#F5F5F7;--bg2:#FFFFFF;--bg3:#F0F0F3;--bg4:#E8E8ED;--border
     </div>
     <div class="setting-row">
       <div class="setting-left">
+        <div class="setting-icon" style="background:var(--copart-dim)">🧹</div>
+        <div>
+          <div class="setting-label">Убирать отторгованные</div>
+          <div class="setting-sub">Лоты пропадут из списка через 3 дня после торгов</div>
+        </div>
+      </div>
+      <button class="toggle" id="tog-clean-sold" onclick="toggleSetting('auto_clean_sold',this)"></button>
+    </div>
+    <div class="setting-row">
+      <div class="setting-left">
         <div class="setting-icon" style="background:rgba(245,158,11,0.15)">💰</div>
         <div>
           <div class="setting-label">Порог цены</div>
@@ -1563,6 +1573,8 @@ async function loadNotifSettings() {
     notifSettings = await r.json();
     const tog = document.getElementById('tog-price-drop');
     if(tog) tog.className = 'toggle ' + (notifSettings.notify_price_drop ? 'on' : '');
+    const clean = document.getElementById('tog-clean-sold');
+    if(clean) clean.className = 'toggle ' + (notifSettings.auto_clean_sold ? 'on' : '');
     const th = document.getElementById('inp-threshold');
     if(th && notifSettings.price_threshold) th.value = notifSettings.price_threshold;
     const qf = document.getElementById('inp-quiet-from');

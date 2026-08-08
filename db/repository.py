@@ -83,6 +83,9 @@ _MIGRATIONS = (
     "ON user_seen (user_id, created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_user_seen_lot "
     "ON user_seen (source, external_id)",
+    # Автоочистка отторгованных лотов
+    "ALTER TABLE notification_settings "
+    "ADD COLUMN IF NOT EXISTS auto_clean_sold BOOLEAN DEFAULT FALSE",
 )
 
 # Разовый перенос данных при переходе на многопользовательский режим.
@@ -699,7 +702,41 @@ async def get_notification_settings(user_id: int) -> dict:
         "quiet_from": 23,
         "quiet_to": 8,
         "notify_price_drop": True,
+        "auto_clean_sold": False,
     }
+
+
+async def cleanup_sold_lots(days: int) -> dict[int, int]:
+    """
+    Убрать из списков лоты, торги по которым прошли больше `days` дней назад —
+    только у тех, кто включил автоочистку.
+
+    После торгов лот либо продан, либо выставлен заново под новым номером:
+    в обоих случаях старая запись мертва, а цена и дата в ней устарели.
+    Сам каталог не трогаем — он общий, и по нему считается статистика.
+
+    Возвращает {user_id: сколько убрано} — чтобы каждому сообщить отдельно.
+    """
+    pool = await get_pool()
+    rows = await pool.fetch(
+        """
+        DELETE FROM user_seen us
+        USING seen_listings s, notification_settings ns
+        WHERE s.source = us.source
+          AND s.external_id = us.external_id
+          AND ns.user_id = us.user_id
+          AND ns.auto_clean_sold IS TRUE
+          AND s.source = 'copart'
+          AND s.auction_date IS NOT NULL
+          AND s.auction_date < NOW() - ($1 || ' days')::INTERVAL
+        RETURNING us.user_id
+        """,
+        str(days),
+    )
+    counts: dict[int, int] = {}
+    for row in rows:
+        counts[row["user_id"]] = counts.get(row["user_id"], 0) + 1
+    return counts
 
 
 async def save_notification_settings(user_id: int, settings: dict):
@@ -707,17 +744,20 @@ async def save_notification_settings(user_id: int, settings: dict):
     await pool.execute(
         """
         INSERT INTO notification_settings
-            (user_id, price_threshold, quiet_from, quiet_to, notify_price_drop)
-        VALUES ($1,$2,$3,$4,$5)
+            (user_id, price_threshold, quiet_from, quiet_to,
+             notify_price_drop, auto_clean_sold)
+        VALUES ($1,$2,$3,$4,$5,$6)
         ON CONFLICT (user_id) DO UPDATE SET
             price_threshold   = EXCLUDED.price_threshold,
             quiet_from        = EXCLUDED.quiet_from,
             quiet_to          = EXCLUDED.quiet_to,
-            notify_price_drop = EXCLUDED.notify_price_drop
+            notify_price_drop = EXCLUDED.notify_price_drop,
+            auto_clean_sold   = EXCLUDED.auto_clean_sold
         """,
         user_id,
         settings.get("price_threshold"),
         settings.get("quiet_from", 23),
         settings.get("quiet_to", 8),
         settings.get("notify_price_drop", True),
+        settings.get("auto_clean_sold", False),
     )

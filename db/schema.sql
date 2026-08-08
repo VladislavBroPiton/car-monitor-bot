@@ -190,5 +190,7 @@ CREATE TABLE IF NOT EXISTS notification_settings (
     quiet_from      INTEGER DEFAULT 23,
     quiet_to        INTEGER DEFAULT 8,
     notify_price_drop BOOLEAN DEFAULT TRUE,
+    -- Убирать из списка лоты, торги по которым прошли (см. SOLD_CLEAN_DAYS)
+    auto_clean_sold BOOLEAN DEFAULT FALSE,
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );

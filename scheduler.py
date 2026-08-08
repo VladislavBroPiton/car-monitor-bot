@@ -3,11 +3,12 @@ import logging
 from aiogram import Bot
 from fastapi import APIRouter, Header, HTTPException
 
-from config import WEBHOOK_SECRET
+from config import WEBHOOK_SECRET, SOLD_CLEAN_DAYS
 from rates import usd_rub
 from db.repository import (
     get_all_active_filters,
     cleanup_old_listings,
+    cleanup_sold_lots,
     record_source_result,
     should_alert,
     get_admin_ids,
@@ -17,7 +18,8 @@ from parsers.autoru import AutoRuParser
 from parsers.drom import DromParser
 from parsers.avito import AvitoParser
 from parsers.copart import CopartParser
-from notifier import process_listings, notify_upcoming_auctions
+from notifier import (process_listings, notify_upcoming_auctions,
+                      notify_cleaned)
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +151,17 @@ async def run_parsers(bot: Bot) -> dict:
         await cleanup_old_listings(days=30)
     except Exception as e:
         logger.warning(f"scheduler: ошибка очистки: {e}")
+
+    # Убираем отторгованные лоты у тех, кто включил автоочистку,
+    # и молча отчитываемся каждому — сообщение уходит без звука
+    try:
+        removed = await cleanup_sold_lots(SOLD_CLEAN_DAYS)
+        if removed:
+            logger.info(f"scheduler: убрано отторгованных лотов: "
+                        f"{sum(removed.values())} у {len(removed)} польз.")
+            await notify_cleaned(bot, removed)
+    except Exception as e:
+        logger.warning(f"scheduler: ошибка очистки отторгованных: {e}")
 
     logger.info(f"scheduler: завершён, новых: {total_new}, напоминаний: {reminders}")
     return {
@@ -309,6 +322,7 @@ def create_scheduler_router(bot: Bot) -> APIRouter:
                     r.add_favorite_from_seen(PROBE, "copart", "0"))
         await check("is_favorite", r.is_favorite(PROBE, "copart", "0"))
         await check("cleanup_old_listings", r.cleanup_old_listings(days=3650))
+        await check("cleanup_sold_lots", r.cleanup_sold_lots(SOLD_CLEAN_DAYS))
 
         # Полный цикл фильтра: создать → скопировать → изменить → выключить
         try:
