@@ -10,31 +10,26 @@ CREATE TABLE IF NOT EXISTS users (
     last_seen_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Фильтры аукциона. Цена — в долларах, пробег — в милях, площадки — штаты:
+-- всё в тех же единицах, что и у самого Copart.
 CREATE TABLE IF NOT EXISTS filters (
     id           SERIAL PRIMARY KEY,
     user_id      BIGINT NOT NULL,
     name         TEXT NOT NULL,
-    -- 'ru' — российские площадки, 'copart' — аукцион (своя семантика полей:
-    -- цена в долларах, пробег в милях, города не применяются)
-    kind         TEXT DEFAULT 'ru',
-    brand        TEXT,
+    kind         TEXT DEFAULT 'copart',
+    sources      TEXT[] DEFAULT ARRAY['copart'],
+    brand        TEXT,     -- одиночная марка (так заданы старые фильтры)
     model        TEXT,
-    year_from    INTEGER,
-    year_to      INTEGER,
-    price_from   INTEGER,
-    price_to     INTEGER,
-    mileage_from INTEGER,
-    mileage_to   INTEGER,
-    city         TEXT,
-    cities       TEXT[],
-    transmission TEXT,
-    body_type    TEXT,
-    sources      TEXT[] DEFAULT ARRAY['autoru', 'drom'],
-    -- Поля, которые использует только источник copart
-    auction_date_from DATE,
-    auction_date_to   DATE,
     brands         TEXT[],   -- несколько марок в одном фильтре
     models         TEXT[],   -- несколько моделей
+    year_from    INTEGER,
+    year_to      INTEGER,
+    price_from   INTEGER,  -- доллары
+    price_to     INTEGER,
+    mileage_from INTEGER,  -- мили
+    mileage_to   INTEGER,
+    auction_date_from DATE,
+    auction_date_to   DATE,
     title_groups   TEXT[],   -- C / S / J — тип документа
     damage_exclude TEXT[],   -- коды исключаемых повреждений: BN, WA, BC…
     yards          TEXT[],   -- штаты площадок: FL, TX…
@@ -139,7 +134,8 @@ ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS vin             TEXT;
 ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS specs           TEXT;
 ALTER TABLE seen_listings ADD COLUMN IF NOT EXISTS auction_notify_stage SMALLINT DEFAULT 0;
 
-ALTER TABLE filters ADD COLUMN IF NOT EXISTS kind           TEXT DEFAULT 'ru';
+ALTER TABLE filters ADD COLUMN IF NOT EXISTS kind           TEXT DEFAULT 'copart';
+UPDATE filters SET kind = 'copart' WHERE kind IS NULL;
 ALTER TABLE filters ADD COLUMN IF NOT EXISTS title_groups   TEXT[];
 ALTER TABLE filters ADD COLUMN IF NOT EXISTS damage_exclude TEXT[];
 ALTER TABLE filters ADD COLUMN IF NOT EXISTS yards          TEXT[];
@@ -183,6 +179,17 @@ CREATE TABLE IF NOT EXISTS source_health (
     last_ok    TIMESTAMPTZ,
     alerted    BOOLEAN DEFAULT FALSE
 );
+
+-- ── Отказ от российских площадок ────────────────────────────────────────────
+-- Бот работает только с аукционом. Эти же запросы выполняются автоматически
+-- при старте приложения (db/repository.py → _DROP_RU); здесь они на случай
+-- ручной уборки в SQL-редакторе Neon.
+DELETE FROM filters       WHERE kind IS NOT NULL AND kind <> 'copart';
+DELETE FROM user_seen     WHERE source IN ('autoru', 'avito', 'drom');
+DELETE FROM favorites     WHERE source IN ('autoru', 'avito', 'drom');
+DELETE FROM price_history WHERE source IN ('autoru', 'avito', 'drom');
+DELETE FROM seen_listings WHERE source IN ('autoru', 'avito', 'drom');
+DELETE FROM source_health WHERE source IN ('autoru', 'avito', 'drom');
 
 CREATE TABLE IF NOT EXISTS notification_settings (
     user_id         BIGINT PRIMARY KEY,

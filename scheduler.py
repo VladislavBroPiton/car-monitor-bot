@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from aiogram import Bot
 from fastapi import APIRouter, Header, HTTPException
@@ -14,9 +13,6 @@ from db.repository import (
     get_admin_ids,
 )
 from parsers.base import SearchFilter
-from parsers.autoru import AutoRuParser
-from parsers.drom import DromParser
-from parsers.avito import AvitoParser
 from parsers.copart import CopartParser
 from notifier import (process_listings, notify_upcoming_auctions,
                       notify_cleaned)
@@ -27,44 +23,33 @@ logger = logging.getLogger(__name__)
 # Один-два пустых прогона — норма (узкий фильтр, ночь), три подряд — подозрительно.
 ZERO_RUNS_ALERT = 3
 
-SOURCE_NAMES = {
-    "copart": "🟡 Copart",
-    "autoru": "🔵 Auto.ru",
-    "avito":  "🟢 Авито",
-    "drom":   "🟠 Дром",
-}
+SOURCE_NAME = "🟡 Copart"
 
 
-async def check_sources_health(bot: Bot, per_source: dict[str, int]):
-    """Написать владельцу, если источник несколько обходов подряд пуст."""
-    for source, found in per_source.items():
-        zero_runs = await record_source_result(source, found)
-        if found:
-            continue
-        if not await should_alert(source, ZERO_RUNS_ALERT):
-            continue
-        name = SOURCE_NAMES.get(source, source)
-        logger.error(f"scheduler: {source} пуст {zero_runs} обходов подряд")
-        text = (
-            f"⚠️ <b>Источник {name} молчит</b>\n\n"
-            f"Уже {zero_runs} обхода подряд возвращает ноль объявлений "
-            f"по всем активным фильтрам.\n\n"
-            f"Обычно это значит одно из двух: фильтры стали слишком узкими "
-            f"либо площадка изменила формат ответа и парсер нужно поправить.\n\n"
-            f"<i>Повторю это сообщение, только когда источник снова оживёт "
-            f"и опять замолчит.</i>"
-        )
-        for admin in await get_admin_ids():
-            try:
-                await bot.send_message(chat_id=admin, text=text,
-                                       parse_mode="HTML")
-            except Exception as e:
-                logger.error(f"scheduler: алерт не отправлен {admin}: {e}")
+async def check_source_health(bot: Bot, found: int):
+    """Написать владельцу, если аукцион несколько обходов подряд пуст."""
+    zero_runs = await record_source_result("copart", found)
+    if found:
+        return
+    if not await should_alert("copart", ZERO_RUNS_ALERT):
+        return
+    logger.error(f"scheduler: copart пуст {zero_runs} обходов подряд")
+    text = (
+        f"⚠️ <b>Источник {SOURCE_NAME} молчит</b>\n\n"
+        f"Уже {zero_runs} обхода подряд возвращает ноль лотов "
+        f"по всем активным фильтрам.\n\n"
+        f"Обычно это значит одно из двух: фильтры стали слишком узкими "
+        f"либо аукцион изменил формат ответа и парсер нужно поправить.\n\n"
+        f"<i>Повторю это сообщение, только когда источник снова оживёт "
+        f"и опять замолчит.</i>"
+    )
+    for admin in await get_admin_ids():
+        try:
+            await bot.send_message(chat_id=admin, text=text, parse_mode="HTML")
+        except Exception as e:
+            logger.error(f"scheduler: алерт не отправлен {admin}: {e}")
 
 
-autoru_parser = AutoRuParser()
-drom_parser = DromParser()
-avito_parser = AvitoParser()
 copart_parser = CopartParser()
 
 
@@ -78,67 +63,43 @@ async def run_parsers(bot: Bot) -> dict:
     filters = [SearchFilter.from_record(r) for r in records]
     logger.info(f"scheduler: фильтров: {len(filters)}")
 
-    # Курс тянем раз за обход — им пользуются и парсер, и калькулятор
+    # Курс тянем раз за обход — им пользуется калькулятор «под ключ»
     try:
         await usd_rub()
     except Exception as e:
         logger.warning(f"scheduler: курс не обновлён: {e}")
 
     total_new = 0
-    per_source: dict[str, int] = {}   # сколько лотов дал каждый источник
+    found_total = 0        # сколько лотов дал аукцион за весь обход
 
     for f in filters:
         try:
-            # Отдельный фильтр Copart не трогает российские площадки:
-            # у него своя семантика полей (доллары, мили, без городов)
-            if f.kind == "copart":
-                logger.info(f"scheduler: 🟡 фильтр Copart «{f.name}»")
-                parsers = [("copart", copart_parser)]
-            else:
-                logger.info(f"scheduler: фильтр «{f.name}» sources={f.sources}")
-                parsers = [
-                    ("autoru", autoru_parser),
-                    ("drom",   drom_parser),
-                    ("avito",  avito_parser),
-                    ("copart", copart_parser),
-                ]
-            results = await asyncio.gather(
-                *(p.search(f) for _, p in parsers),
-                return_exceptions=True,
-            )
+            logger.info(f"scheduler: 🟡 фильтр «{f.name}»")
+            listings = await copart_parser.search(f)
+            found_total += len(listings)
 
-            all_listings = []
-
-            for (source, _), result in zip(parsers, results):
-                if isinstance(result, Exception):
-                    logger.error(f"{source} ошибка «{f.name}»: {result}")
-                    per_source.setdefault(source, 0)
-                else:
-                    all_listings.extend(result)
-                    per_source[source] = per_source.get(source, 0) + len(result)
-
-            if all_listings:
+            if listings:
                 new_count = await process_listings(
                     bot=bot,
-                    listings=all_listings,
+                    listings=listings,
                     chat_id=f.user_id,
                 )
                 total_new += new_count
                 logger.info(
                     f"scheduler: «{f.name}» — "
-                    f"всего {len(all_listings)}, новых: {new_count}"
+                    f"всего {len(listings)}, новых: {new_count}"
                 )
 
         except Exception as e:
             logger.error(f"scheduler: ошибка фильтра «{f.name}»: {e}")
             continue
 
-    # Следим за здоровьем источников: если площадка сменит формат ответа,
+    # Следим за здоровьем источника: если аукцион сменит формат ответа,
     # это иначе видно только по отсутствию уведомлений
     try:
-        await check_sources_health(bot, per_source)
+        await check_source_health(bot, found_total)
     except Exception as e:
-        logger.warning(f"scheduler: ошибка проверки источников: {e}")
+        logger.warning(f"scheduler: ошибка проверки источника: {e}")
 
     # Напоминаем о торгах, которые вот-вот начнутся
     reminders = 0
@@ -196,7 +157,7 @@ def create_scheduler_router(bot: Bot) -> APIRouter:
 
     @router.get("/run_now")
     async def run_now():
-        """Запустить парсер вручную через браузер (без авторизации — только для тестов)."""
+        """Запустить обход вручную через браузер (без авторизации — только для тестов)."""
         result = await run_parsers(bot)
         return result
 
@@ -218,7 +179,7 @@ def create_scheduler_router(bot: Bot) -> APIRouter:
         for rec in records:
             f = SearchFilter.from_record(rec)
             item = {
-                "id": f.id, "имя": f.name, "владелец": f.user_id, "тип": f.kind,
+                "id": f.id, "имя": f.name, "владелец": f.user_id,
                 "марки": selected_brands(f), "модели": selected_models(f),
                 "год": [f.year_from, f.year_to],
                 "цена": [f.price_from, f.price_to],
@@ -226,23 +187,21 @@ def create_scheduler_router(bot: Bot) -> APIRouter:
                 "документ": f.title_groups, "площадки": f.yards,
                 "исключено": f.damage_exclude,
                 "на_ходу": f.run_and_drive, "купить_сразу": f.buy_now_only,
-                "источники": f.sources,
             }
-            if f.kind == "copart" or "copart" in (f.sources or []):
-                item["запрос_к_аукциону"] = _build_filter(f)
-                try:
-                    p = await copart_parser.preview(f)
-                    item["нашлось_на_аукционе"] = p.get("total")
-                    item["прошло_фильтры"] = p.get("matched")
-                    item["проверено"] = p.get("checked")
-                    item["примечание"] = p.get("note") or ""
-                    item["примеры"] = [
-                        {"лот": l.external_id, "название": l.title,
-                         "цена": l.price, "купить_сразу": l.buy_now_price}
-                        for l in p.get("sample", [])[:3]
-                    ]
-                except Exception as e:
-                    item["ошибка_предпросмотра"] = f"{type(e).__name__}: {e}"
+            item["запрос_к_аукциону"] = _build_filter(f)
+            try:
+                p = await copart_parser.preview(f)
+                item["нашлось_на_аукционе"] = p.get("total")
+                item["прошло_фильтры"] = p.get("matched")
+                item["проверено"] = p.get("checked")
+                item["примечание"] = p.get("note") or ""
+                item["примеры"] = [
+                    {"лот": l.external_id, "название": l.title,
+                     "цена": l.price, "купить_сразу": l.buy_now_price}
+                    for l in p.get("sample", [])[:3]
+                ]
+            except Exception as e:
+                item["ошибка_предпросмотра"] = f"{type(e).__name__}: {e}"
 
             # Сколько уже отправлено этому владельцу
             item["уже_отправлено_владельцу"] = await pool.fetchval(
@@ -326,7 +285,7 @@ def create_scheduler_router(bot: Bot) -> APIRouter:
 
         # Полный цикл фильтра: создать → скопировать → изменить → выключить
         try:
-            f = await r.create_filter(user_id=PROBE, name="проверка", kind="copart",
+            f = await r.create_filter(user_id=PROBE, name="проверка",
                                       brands=["TOYOTA"], models=["CAMRY"])
             results["create_filter"] = "ok"
         except Exception as e:
@@ -382,7 +341,7 @@ def create_scheduler_router(bot: Bot) -> APIRouter:
         out = {}
         payload = _build_payload(
             SearchFilter(id=0, user_id=0, name="debug", brand="CHEVROLET",
-                         kind="copart", sources=["copart"]), 0)
+                         sources=["copart"]), 0)
         payload["size"] = 1
 
         # 1. Прямой POST без прогрева
@@ -432,36 +391,5 @@ def create_scheduler_router(bot: Bot) -> APIRouter:
         from config import SCRAPER_API_KEY
         out["scraperapi_ключ_задан"] = bool(SCRAPER_API_KEY)
         return out
-
-    @router.get("/debug/drom")
-    async def debug_drom():
-        import asyncio, random, aiohttp
-        from bs4 import BeautifulSoup
-        url = "https://auto.drom.ru/region34/chevrolet/cruze/?minyear=2015&maxyear=2024&minprice=500000&maxprice=1500000&order=date_add"
-        await asyncio.sleep(random.uniform(2, 4))
-        hdrs = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Referer": "https://www.drom.ru/",
-            "Upgrade-Insecure-Requests": "1",
-        }
-        connector = aiohttp.TCPConnector(ssl=False)
-        async with aiohttp.ClientSession(connector=connector) as session:
-            async with session.get(url, headers=hdrs, timeout=aiohttp.ClientTimeout(total=30), allow_redirects=True) as resp:
-                status = resp.status
-                html = await resp.text() if resp.status == 200 else ""
-        if not html:
-            return {"status": status, "html_length": 0, "note": "429=rate limit, попробуй через 5 мин"}
-        soup = BeautifulSoup(html, "html.parser")
-        selectors = {
-            "data-ftid=bulls-list_bull": len(soup.select("[data-ftid='bulls-list_bull']")),
-            "div.bull-list-item-v2": len(soup.select("div.bull-list-item-v2")),
-            "div[data-bull-id]": len(soup.select("div[data-bull-id]")),
-            "article": len(soup.select("article")),
-            "data-ftid_any": len(soup.select("[data-ftid]")),
-        }
-        ftid_vals = list({el.get("data-ftid") for el in soup.select("[data-ftid]") if el.get("data-ftid")})[:30]
-        return {"status": status, "html_length": len(html), "selectors": selectors, "ftid_values": ftid_vals}
 
     return router

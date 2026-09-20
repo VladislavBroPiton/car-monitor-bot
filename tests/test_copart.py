@@ -37,7 +37,6 @@ RAW_LOTS = FIXTURE["data"]["results"]["content"]
 
 
 def _filter(**kw) -> SearchFilter:
-    kw.setdefault("sources", ["copart"])
     return SearchFilter(id=1, user_id=1, name="тест", **kw)
 
 
@@ -110,23 +109,16 @@ def test_open_ended_range():
     assert flt["YEAR"] == ["lot_year:[2018 TO *]"]
 
 
-def test_mileage_converted_for_shared_filter():
-    """Общий фильтр задаёт километры, одометр Copart — в милях."""
-    flt = _build_filter(_filter(brand="KIA", mileage_to=160934, kind="ru"))
+def test_mileage_is_in_miles():
+    """Пробег задаётся сразу в милях — как его хранит аукцион."""
+    flt = _build_filter(_filter(brand="KIA", mileage_to=100000))
     assert flt["ODM"] == ["odometer_reading_received:[* TO 100000]"]
 
 
-def test_mileage_kept_for_dedicated_filter():
-    """В отдельном фильтре Copart пробег вводится сразу в милях."""
-    flt = _build_filter(_filter(brand="KIA", mileage_to=100000, kind="copart"))
-    assert flt["ODM"] == ["odometer_reading_received:[* TO 100000]"]
-
-
-def test_price_bounds_by_filter_kind():
-    shared = _filter(price_from=270000, price_to=900000, kind="ru")
-    assert _price_bounds_usd(shared) == (3000, 10000)      # пересчёт по курсу 90
-    native = _filter(price_from=3000, price_to=10000, kind="copart")
-    assert _price_bounds_usd(native) == (3000, 10000)      # доллары как есть
+def test_price_bounds_are_dollars():
+    """Границы цены — в валюте торгов, без пересчёта."""
+    f = _filter(price_from=3000, price_to=10000)
+    assert _price_bounds_usd(f) == (3000, 10000)
 
 
 def test_damage_exclusion_is_negated():
@@ -163,8 +155,8 @@ def test_buy_now_price_used_when_estimate_missing():
     """У лотов «купить сразу» оценки часто нет — цену берём из Buy It Now."""
     lot = _parse_lot({"lotNumberStr": "2", "ld": "TEST", "la": -1.0,
                       "bnp": 4500.0}, "тест")
-    assert _matches(lot, _filter(price_to=5000, kind="copart"), False)
-    assert not _matches(lot, _filter(price_to=4000, kind="copart"), False)
+    assert _matches(lot, _filter(price_to=5000), False)
+    assert not _matches(lot, _filter(price_to=4000), False)
 
 
 def test_model_matched_by_title_when_facet_missed():

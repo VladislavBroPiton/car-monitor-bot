@@ -71,8 +71,7 @@ from urllib.parse import quote
 
 import aiohttp
 
-from config import USD_RUB_RATE, SCRAPER_API_KEY
-from rates import cached_rate
+from config import SCRAPER_API_KEY
 from parsers.base import BaseParser, Listing, SearchFilter
 
 logger = logging.getLogger(__name__)
@@ -255,24 +254,6 @@ def _make_values(brand: str) -> list[str]:
     return MAKE_MAP.get(key, [key])
 
 
-KM_IN_MILE = 1.60934
-
-
-def _is_native(f: SearchFilter) -> bool:
-    """
-    Отдельный фильтр Copart — значения уже в «родных» единицах аукциона:
-    цена в долларах, пробег в милях. У общего фильтра — рубли и километры.
-    """
-    return getattr(f, "kind", "ru") == "copart"
-
-
-def _km_to_miles(km: Optional[int]) -> Optional[int]:
-    """Границы пробега из фильтра (км) → мили, как их хранит Copart."""
-    if not km:
-        return None
-    return int(km / KM_IN_MILE)
-
-
 def _solr_range(lo, hi) -> str:
     """Диапазон Solr: [2015 TO 2020], [2015 TO *], [* TO 2020]."""
     return f"[{lo if lo is not None else '*'} TO {hi if hi is not None else '*'}]"
@@ -317,13 +298,11 @@ def _build_filter(f: SearchFilter, with_model: bool = True) -> dict:
     if f.year_from or f.year_to:
         flt["YEAR"] = [f"lot_year:{_solr_range(f.year_from, f.year_to)}"]
 
-    # В отдельном фильтре Copart пробег вводится сразу в милях,
-    # в общем — в километрах, поэтому там переводим
+    # Пробег задаётся сразу в милях — как его хранит аукцион
     if f.mileage_from or f.mileage_to:
-        lo, hi = f.mileage_from, f.mileage_to
-        if not _is_native(f):
-            lo, hi = _km_to_miles(lo), _km_to_miles(hi)
-        flt["ODM"] = [f"odometer_reading_received:{_solr_range(lo, hi)}"]
+        flt["ODM"] = [
+            f"odometer_reading_received:{_solr_range(f.mileage_from, f.mileage_to)}"
+        ]
 
     date_expr = _date_range(f)
     if date_expr:
@@ -470,16 +449,8 @@ def _parse_lot(raw: dict, filter_name: str) -> Optional[Listing]:
 # ── Клиентская фильтрация ─────────────────────────────────────────────────────
 
 def _price_bounds_usd(f: SearchFilter) -> tuple[Optional[int], Optional[int]]:
-    """
-    В отдельном фильтре Copart цена сразу в долларах — берём как есть.
-    В общем фильтре она в рублях, переводим по курсу USD_RUB_RATE.
-    """
-    if _is_native(f):
-        return f.price_from, f.price_to
-    rate = cached_rate() or USD_RUB_RATE or 1
-    lo = int(f.price_from / rate) if f.price_from else None
-    hi = int(f.price_to   / rate) if f.price_to   else None
-    return lo, hi
+    """Границы цены задаются в долларах — в той же валюте, что и лоты."""
+    return f.price_from, f.price_to
 
 
 def _matches(listing: Listing, f: SearchFilter, model_client_side: bool) -> bool:
@@ -724,11 +695,6 @@ class CopartParser(BaseParser):
     SOURCE = "copart"
 
     async def search(self, f: SearchFilter) -> list[Listing]:
-        # Отдельный фильтр Copart работает всегда; общий — только если
-        # аукцион явно выбран в источниках
-        if not _is_native(f) and "copart" not in f.sources:
-            return []
-
         brands = selected_brands(f)
         if brands and all(b in MAKES_NOT_ON_COPART for b in brands):
             logger.info(f"copart: марок {brands} на аукционе нет, "

@@ -2,12 +2,9 @@
 import logging
 from typing import Optional
 from fastapi import APIRouter, Depends
-from fastapi.responses import HTMLResponse
-from pathlib import Path
 from pydantic import BaseModel
 
 from db.repository import get_pool, get_active_filters, delete_filter, toggle_filter
-from config import OWNER_ID
 from rates import usd_rub
 from auth import current_user
 
@@ -40,19 +37,17 @@ async def api_stats(user_id: int = Depends(current_user)):
         user_id,
     )
 
-    # Топ дешёвых за 24 часа.
-    # Лоты Copart в долларах, российские — в рублях; сортировать по сырому
-    # числу нельзя, иначе аукцион вытеснит всё остальное. Приводим к рублям.
+    # Топ дешёвых за 24 часа. Цены лотов в долларах, рублёвый эквивалент
+    # считаем здесь же — он показывается в карточке
     rate = await usd_rub()
     top_deals = await pool.fetch(
         """SELECT s.source, s.external_id, s.url, s.title, s.price, s.city,
                   us.created_at, s.currency, s.image_url,
-                  CASE WHEN s.source = 'copart' THEN ROUND(s.price * $2)::INT
-                       ELSE s.price END AS price_rub
+                  ROUND(s.price * $2)::INT AS price_rub
            FROM user_seen us JOIN seen_listings s ON s.source = us.source AND s.external_id = us.external_id WHERE us.user_id = $1
              AND us.created_at > NOW() - INTERVAL '24 hours'
              AND s.price IS NOT NULL AND s.price > 0
-           ORDER BY price_rub ASC LIMIT 10""",
+           ORDER BY s.price ASC LIMIT 10""",
         user_id, rate,
     )
 
@@ -89,51 +84,6 @@ async def api_stats(user_id: int = Depends(current_user)):
         "hourly": [{"hour": str(r["hour"]), "cnt": r["cnt"]} for r in hourly],
         "daily":  [{"day":  str(r["day"]),  "cnt": r["cnt"]} for r in daily],
     }
-
-
-# ── Listings ──────────────────────────────────────────────────────────────────
-
-@router.get("/listings")
-async def api_listings(page: int = 1, source: str = "", limit: int = 20,
-                       user_id: int = Depends(current_user)):
-    pool = await get_pool()
-    offset = (page - 1) * limit
-
-    # Только объявления этого пользователя
-    join = ("FROM user_seen us JOIN seen_listings s "
-            "ON s.source = us.source AND s.external_id = us.external_id "
-            "WHERE us.user_id = $1")
-    args: list = [user_id]
-    if source:
-        args.append(source)
-        join += f" AND s.source = ${len(args)}"
-
-    try:
-        total = await pool.fetchval(f"SELECT COUNT(*) {join}", *args)
-        rows = await pool.fetch(
-            f"""SELECT s.*, us.created_at {join}
-                ORDER BY us.created_at DESC
-                LIMIT ${len(args) + 1} OFFSET ${len(args) + 2}""",
-            *args, limit, offset,
-        )
-
-        def row_to_dict(r):
-            d = dict(r)
-            # Конвертируем datetime в строку
-            if 'created_at' in d and d['created_at']:
-                d['created_at'] = str(d['created_at'])
-            return d
-
-        return {
-            "items": [row_to_dict(r) for r in rows],
-            "total": total,
-            "page":  page,
-            "pages": max(1, (total + limit - 1) // limit),
-        }
-    except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(f"api_listings error: {e}")
-        raise
 
 
 # ── Copart ────────────────────────────────────────────────────────────────────
@@ -307,19 +257,16 @@ async def api_filters(user_id: int = Depends(current_user)):
     return [{
         "id":           f["id"],
         "name":         f["name"],
-        "kind":         f["kind"] or "ru",
         "brand":        f["brand"],
         "model":        f["model"],
+        "brands":       list(f["brands"] or []),
+        "models":       list(f["models"] or []),
         "year_from":    f["year_from"],
         "year_to":      f["year_to"],
         "price_from":   f["price_from"],
         "price_to":     f["price_to"],
         "mileage_from": f["mileage_from"],
         "mileage_to":   f["mileage_to"],
-        "cities":       list(f["cities"] or []),
-        "transmission": f["transmission"],
-        "body_type":    f["body_type"],
-        "sources":      list(f["sources"] or []),
         "auction_date_from": str(f["auction_date_from"]) if f["auction_date_from"] else None,
         "auction_date_to":   str(f["auction_date_to"])   if f["auction_date_to"]   else None,
         "title_groups":   list(f["title_groups"]   or []),

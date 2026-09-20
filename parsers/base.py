@@ -15,7 +15,6 @@ class Listing:
     mileage: Optional[int] = None
     city: Optional[str] = None
     transmission: Optional[str] = None
-    body_type: Optional[str] = None
     filter_name: Optional[str] = None
     # ── Поля аукционов (Copart) ───────────────────────────────────────────────
     damage_description: Optional[str] = None            # «FRONT END», «REAR END», …
@@ -34,6 +33,7 @@ class Listing:
 
 @dataclass
 class SearchFilter:
+    """Фильтр аукциона: цена в долларах, пробег в милях, площадки — штаты."""
     id: int
     user_id: int
     name: str
@@ -43,21 +43,13 @@ class SearchFilter:
     year_to: Optional[int] = None
     price_from: Optional[int] = None
     price_to: Optional[int] = None
+    # Пробег — в милях, как у самого аукциона
     mileage_from: Optional[int] = None
     mileage_to: Optional[int] = None
-    city: Optional[str] = None   # устарело
-    cities: list[str] = field(default_factory=list)  # список городов
-    transmission: Optional[str] = None
-    body_type: Optional[str] = None
-    sources: list[str] = field(default_factory=lambda: ["autoru", "drom"])
-    # 'ru' — российские площадки; 'copart' — отдельный фильтр аукциона,
-    # у которого цена задаётся в долларах, а пробег в милях
-    kind: str = "ru"
     # Несколько марок/моделей в одном фильтре. Если пусто — берутся
     # одиночные brand/model выше (так работают старые фильтры).
     brands: list[str] = field(default_factory=list)
     models: list[str] = field(default_factory=list)
-    # ── Поля, которые использует только источник copart ───────────────────────
     auction_date_from: Optional[datetime.date] = None
     auction_date_to: Optional[datetime.date] = None
     title_groups: list[str] = field(default_factory=list)    # C / S / J
@@ -87,12 +79,6 @@ class SearchFilter:
             price_to=record["price_to"],
             mileage_from=record["mileage_from"],
             mileage_to=record["mileage_to"],
-            city=record["city"],
-            cities=list(record["cities"] or []),
-            transmission=record["transmission"],
-            body_type=record["body_type"],
-            sources=list(record["sources"] or ["autoru", "drom"]),
-            kind=opt("kind") or "ru",
             brands=list(opt("brands") or []),
             models=list(opt("models") or []),
             auction_date_from=opt("auction_date_from"),

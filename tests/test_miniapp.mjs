@@ -60,12 +60,11 @@ const ok = (cond, name) => eq(!!cond, true, name)
 const { fmtP, cpSeverity, cpAuctionLabel, cpDayLabel } = sandbox
 const { cpDamage, cpPrice, esc } = sandbox.__exp
 
-// ── Валюта: главный дефект, из-за которого доллары подписывались рублями ──────
+// ── Валюта: лоты аукциона всегда в долларах, канадские — в CAD ───────────────
 eq(fmtP(8202, {source: 'copart', currency: 'USD'}), '$8 202', 'доллары Copart')
 eq(fmtP(8202, {source: 'copart', currency: 'CAD'}), 'CA$8 202', 'канадские доллары')
-eq(fmtP(500000, {source: 'avito'}), '500 000 ₽', 'рубли российских площадок')
 eq(fmtP(0, {source: 'copart'}), '—', 'нулевая цена')
-eq(fmtP(1000, null), '1 000 ₽', 'без объекта — рубли, как раньше')
+eq(fmtP(1000, null), '$1 000', 'без объекта — доллары: других валют в боте нет')
 
 // ── Тяжесть повреждения ──────────────────────────────────────────────────────
 eq(cpSeverity('BURN'), 'severe', 'пожар — тяжёлое')

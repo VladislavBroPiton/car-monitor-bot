@@ -88,6 +88,21 @@ _MIGRATIONS = (
     "ADD COLUMN IF NOT EXISTS auto_clean_sold BOOLEAN DEFAULT FALSE",
 )
 
+# Разовая уборка после отказа от российских площадок: бот работает только
+# с аукционом, а их фильтры и объявления остались бы в базе мёртвым грузом
+# и портили бы статистику. Запросы идемпотентны — после первого раза
+# они ничего не находят.
+_DROP_RU = (
+    "DELETE FROM filters        WHERE kind IS NOT NULL AND kind <> 'copart'",
+    "DELETE FROM user_seen      WHERE source IN ('autoru', 'avito', 'drom')",
+    "DELETE FROM favorites      WHERE source IN ('autoru', 'avito', 'drom')",
+    "DELETE FROM price_history  WHERE source IN ('autoru', 'avito', 'drom')",
+    "DELETE FROM seen_listings  WHERE source IN ('autoru', 'avito', 'drom')",
+    "DELETE FROM source_health  WHERE source IN ('autoru', 'avito', 'drom')",
+    "ALTER TABLE filters ALTER COLUMN kind SET DEFAULT 'copart'",
+    "UPDATE filters SET kind = 'copart' WHERE kind IS NULL",
+)
+
 # Разовый перенос данных при переходе на многопользовательский режим.
 # Всё, что бот уже присылал, закрепляем за владельцем — иначе после
 # обновления ему прилетит вся история заново.
@@ -113,6 +128,15 @@ async def _apply_migrations(pool: asyncpg.Pool):
             await pool.execute(sql)
         except Exception as e:
             logger.warning(f"миграция не применена ({sql[:60]}…): {e}")
+
+    # Уборка данных российских площадок — после первого раза вхолостую
+    for sql in _DROP_RU:
+        try:
+            result = await pool.execute(sql)
+            if result and not result.endswith(" 0"):
+                logger.info(f"уборка РФ-площадок: {sql[:45]}… → {result}")
+        except Exception as e:
+            logger.warning(f"уборка не выполнена ({sql[:45]}…): {e}")
 
     # Перенос истории владельцу — выполняется один раз, дальше вхолостую
     for sql in _BACKFILL:
@@ -232,13 +256,9 @@ async def create_filter(
     price_to: Optional[int] = None,
     mileage_from: Optional[int] = None,
     mileage_to: Optional[int] = None,
-    cities: Optional[list[str]] = None,
-    transmission: Optional[str] = None,
-    body_type: Optional[str] = None,
-    sources: list[str] = None,
     auction_date_from: Optional[datetime.date] = None,
     auction_date_to: Optional[datetime.date] = None,
-    kind: str = "ru",
+    kind: str = "copart",
     brands: Optional[list[str]] = None,
     models: Optional[list[str]] = None,
     title_groups: Optional[list[str]] = None,
@@ -247,37 +267,32 @@ async def create_filter(
     run_and_drive: Optional[bool] = None,
     buy_now_only: Optional[bool] = None,
 ) -> asyncpg.Record:
-    if sources is None:
-        sources = ["copart"] if kind == "copart" else ["autoru", "drom", "avito"]
     pool = await get_pool()
     return await pool.fetchrow(
         """
         INSERT INTO filters
-            (user_id, name, kind, brand, model, year_from, year_to,
-             price_from, price_to, mileage_from, mileage_to,
-             cities, transmission, body_type, sources,
+            (user_id, name, kind, sources, brand, model, brands, models,
+             year_from, year_to, price_from, price_to,
+             mileage_from, mileage_to,
              auction_date_from, auction_date_to,
-             title_groups, damage_exclude, yards, run_and_drive, buy_now_only,
-             brands, models)
+             title_groups, damage_exclude, yards, run_and_drive, buy_now_only)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-                $18,$19,$20,$21,$22,$23,$24)
+                $18,$19,$20,$21)
         RETURNING *
         """,
-        user_id, name, kind, brand, model, year_from, year_to,
-        price_from, price_to, mileage_from, mileage_to,
-        cities, transmission, body_type, sources,
+        user_id, name, kind, sources or ["copart"], brand, model, brands, models,
+        year_from, year_to, price_from, price_to,
+        mileage_from, mileage_to,
         auction_date_from, auction_date_to,
         title_groups, damage_exclude, yards, run_and_drive, buy_now_only,
-        brands, models,
     )
 
 
 # Колонки, которые копируются при дублировании фильтра
 FILTER_COPY_COLUMNS = (
-    "user_id", "kind", "brand", "model", "brands", "models",
+    "user_id", "kind", "sources", "brand", "model", "brands", "models",
     "year_from", "year_to", "price_from", "price_to",
-    "mileage_from", "mileage_to", "cities", "transmission", "body_type",
-    "sources", "auction_date_from", "auction_date_to",
+    "mileage_from", "mileage_to", "auction_date_from", "auction_date_to",
     "title_groups", "damage_exclude", "yards", "run_and_drive", "buy_now_only",
 )
 
@@ -307,7 +322,7 @@ async def update_filter_field(
     allowed = {
         "name", "brand", "model", "year_from", "year_to",
         "price_from", "price_to", "mileage_from", "mileage_to",
-        "cities", "transmission", "body_type", "sources",
+        "brands", "models",
         "auction_date_from", "auction_date_to",
         "title_groups", "damage_exclude", "yards", "run_and_drive", "buy_now_only",
     }
@@ -375,21 +390,6 @@ async def mark_seen(listing, user_id: int) -> bool:
             ON CONFLICT (source, external_id) DO NOTHING""",
         *values,
     )
-
-    # Авито меняет URL у одного и того же объявления, поэтому для него
-    # дополнительно проверяем совпадение по заголовку и цене
-    if source == "avito" and listing.title and listing.price:
-        twin = await pool.fetchval(
-            """SELECT 1 FROM user_seen us
-               JOIN seen_listings s
-                 ON s.source = us.source AND s.external_id = us.external_id
-               WHERE us.user_id = $1 AND s.source = 'avito'
-                 AND s.title = $2 AND s.price = $3
-                 AND s.external_id <> $4""",
-            user_id, listing.title, listing.price, listing.external_id,
-        )
-        if twin:
-            return False
 
     result = await pool.execute(
         """INSERT INTO user_seen (user_id, source, external_id, filter_name)

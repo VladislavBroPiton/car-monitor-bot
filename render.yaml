@@ -15,7 +15,5 @@ services:
         sync: false
       - key: WEBHOOK_SECRET
         sync: false
-      - key: AUTORU_SESSION_ID
-        sync: false
-      - key: AUTORU_CSRF_TOKEN
+      - key: SCRAPER_API_KEY
         sync: false

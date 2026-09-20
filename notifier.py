@@ -8,6 +8,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMedia
 import datetime
 from config import (OWNER_ID, USD_RUB_RATE, MAX_NOTIFY_PER_RUN,
                     WEBHOOK_HOST, SOLD_CLEAN_DAYS)
+from rates import usd_rub
 from parsers.base import Listing
 from parsers.copart import damage_ru, title_ru, keys_ru
 from db.repository import (
@@ -23,12 +24,7 @@ logger = logging.getLogger(__name__)
 
 SEND_DELAY = 0.5
 
-SOURCE_BADGE = {
-    "autoru": "🔵 Auto.ru",
-    "drom":   "🟠 Дром.ру",
-    "avito":  "🟢 Авито",
-    "copart": "🟡 Copart",
-}
+SOURCE_BADGE = "🟡 Copart"
 
 TRANSMISSION_RU = {
     "AUTOMATIC": "Автомат",
@@ -36,17 +32,6 @@ TRANSMISSION_RU = {
     "ROBOT":      "Робот",
     "VARIATOR":   "Вариатор",
     "AUTO":       "Автомат",
-}
-
-BODY_RU = {
-    "SEDAN":    "Седан",
-    "SUV":      "Внедорожник",
-    "HATCHBACK":"Хэтчбек",
-    "WAGON":    "Универсал",
-    "COUPE":    "Купе",
-    "MINIVAN":  "Минивэн",
-    "PICKUP":   "Пикап",
-    "VAN":      "Фургон",
 }
 
 
@@ -76,112 +61,81 @@ def _fmt_auction_date(value) -> str:
     return (value + datetime.timedelta(hours=3)).strftime("%d.%m.%Y в %H:%M МСК")
 
 
-def _fmt_price(price: Optional[int]) -> str:
-    if not price:
-        return "цена не указана"
-    return f"{price:,}".replace(",", "\u2009") + " ₽"   # тонкий пробел как разделитель
-
-
-def _fmt_mileage(mileage: Optional[int]) -> str:
-    if not mileage:
-        return ""
-    return f"{mileage:,}".replace(",", "\u2009") + " км"
-
-
 def _fmt_transmission(value: Optional[str]) -> str:
     if not value:
         return ""
     return TRANSMISSION_RU.get(value.upper(), value)
 
 
-def _fmt_body(value: Optional[str]) -> str:
-    if not value:
-        return ""
-    return BODY_RU.get(value.upper(), value)
-
-
 def _build_message(listing: Listing, relists: int = 0) -> str:
-    badge     = SOURCE_BADGE.get(listing.source, listing.source)
-    is_copart = listing.source == "copart"
-    price     = (_fmt_amount(listing.price, listing.currency) if is_copart
-                 else _fmt_price(listing.price))
+    price = _fmt_amount(listing.price, listing.currency)
 
     # ── Строка характеристик ──────────────────────────────────────────────────
     specs: list[str] = []
     if listing.year:
         specs.append(f"{listing.year} г.")
     if listing.mileage:
-        if is_copart:
-            miles = _fmt_miles(listing.mileage)
-            # NOT ACTUAL — одометр скручен либо показания неизвестны
-            if (listing.odometer_brand or "").upper() == "NOT ACTUAL":
-                miles += " ⚠️ не подтверждён"
-            specs.append(miles)
-        else:
-            specs.append(_fmt_mileage(listing.mileage))
+        miles = _fmt_miles(listing.mileage)
+        # NOT ACTUAL — одометр скручен либо показания неизвестны
+        if (listing.odometer_brand or "").upper() == "NOT ACTUAL":
+            miles += " ⚠️ не подтверждён"
+        specs.append(miles)
     tr = _fmt_transmission(listing.transmission)
     if tr:
         specs.append(tr)
-    bt = _fmt_body(listing.body_type)
-    if bt:
-        specs.append(bt)
 
     # ── Сборка сообщения ──────────────────────────────────────────────────────
     lines: list[str] = []
 
     # Шапка: источник + разделитель
-    lines.append(f"{badge}")
+    lines.append(SOURCE_BADGE)
     lines.append("┄" * 18)
 
     # Название
     lines.append(f"<b>{listing.title}</b>")
 
     # Номер лота — по нему ищут на самом аукционе
-    if is_copart:
-        lines.append(f"<code>Лот {listing.external_id}</code>")
+    lines.append(f"<code>Лот {listing.external_id}</code>")
 
     # Цена — главный акцент. У лотов «купить сразу» она и есть главная,
     # оценочной стоимости там часто нет вовсе.
-    if is_copart and listing.buy_now_price:
+    if listing.buy_now_price:
         buy_now = _fmt_amount(listing.buy_now_price, listing.currency)
         lines.append(f"\n<b>⚡️ Купить сразу: {buy_now}</b>")
         if listing.price:
             lines.append(f"<i>оценка: {price}</i>")
     else:
-        label = "💰 Оценка:" if is_copart else "💰"
-        lines.append(f"\n<b>{label} {price}</b>")
+        lines.append(f"\n<b>💰 Оценка: {price}</b>")
 
-    if is_copart and listing.repair_cost:
+    if listing.repair_cost:
         lines.append(f"🔧 Ремонт: ~{_fmt_amount(listing.repair_cost, listing.currency)}")
 
     # Характеристики
     if specs:
         lines.append("📋 " + "  ·  ".join(specs))
 
-    if is_copart and listing.specs:
+    if listing.specs:
         lines.append(f"⚙️ {listing.specs}")
 
     # Состояние лота: документ, ход, ключи, повреждение, торги
-    if is_copart:
-        state = [s for s in (title_ru(listing.title_group),
-                             "🚀 На ходу" if listing.run_and_drive else "",
-                             keys_ru(listing.has_keys)) if s]
-        if state:
-            lines.append("  ·  ".join(state))
+    state = [s for s in (title_ru(listing.title_group),
+                         "🚀 На ходу" if listing.run_and_drive else "",
+                         keys_ru(listing.has_keys)) if s]
+    if state:
+        lines.append("  ·  ".join(state))
 
-        if listing.damage_description:
-            lines.append(f"💥 Повреждение: {damage_ru(listing.damage_description)}")
+    if listing.damage_description:
+        lines.append(f"💥 Повреждение: {damage_ru(listing.damage_description)}")
 
-        auction = _fmt_auction_date(listing.auction_date)
-        if auction:
-            lines.append(f"🗓 Аукцион: {auction}")
+    auction = _fmt_auction_date(listing.auction_date)
+    if auction:
+        lines.append(f"🗓 Аукцион: {auction}")
 
-    # Город (для Copart — площадка хранения)
+    # Площадка хранения
     if listing.city:
-        icon = "🏁" if is_copart else "📍"
-        lines.append(f"{icon} {listing.city}")
+        lines.append(f"🏁 {listing.city}")
 
-    if is_copart and listing.vin:
+    if listing.vin:
         lines.append(f"<code>VIN {listing.vin}</code>")
 
     # Машина уже была на торгах под другим номером — значит, не ушла.
@@ -204,11 +158,10 @@ def _build_keyboard(listing: Listing) -> InlineKeyboardMarkup:
     # поэтому режем по максимуму, а не «на глазок»: "hide:" + источник + ":" ≈ 12
     limit = 64 - len("hide:") - len(listing.source) - 1
     short_id = listing.external_id[:limit]
-    open_text = "🔗 Открыть лот" if listing.source == "copart" else "🔗 Открыть объявление"
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
-                text=open_text,
+                text="🔗 Открыть лот",
                 url=listing.url,
             ),
         ],
@@ -222,12 +175,11 @@ def _build_keyboard(listing: Listing) -> InlineKeyboardMarkup:
                 callback_data=f"hide:{listing.source}:{short_id}",
             ),
         ],
-    ] + ([
         [InlineKeyboardButton(
             text="🧮 Сколько выйдет «под ключ»",
             callback_data=f"cost:{short_id}",
         )],
-    ] if listing.source == "copart" else []))
+    ])
 
 
 CAPTION_LIMIT = 1024   # ограничение Telegram на подпись к фото
@@ -282,8 +234,7 @@ ALBUM_MAX  = 10          # ограничение Telegram на медиагру
 
 def _album_caption(listing: Listing) -> str:
     """Короткая подпись под фото в альбоме — длинную Telegram обрежет."""
-    price = (_fmt_amount(listing.buy_now_price or listing.price, listing.currency)
-             if listing.source == "copart" else _fmt_price(listing.price))
+    price = _fmt_amount(listing.buy_now_price or listing.price, listing.currency)
     parts = [f"<b>{listing.title}</b>", f"Лот {listing.external_id} · {price}"]
     if listing.damage_description:
         parts.append(damage_ru(listing.damage_description))
@@ -328,8 +279,8 @@ async def _send_album(bot: Bot, listings: list[Listing], chat_id: int):
 
 
 def _overflow_message(hidden: int, filter_name: Optional[str]) -> str:
-    """Сводка по объявлениям, которые не стали слать в чат."""
-    word = "объявление" if hidden == 1 else "объявления" if hidden < 5 else "объявлений"
+    """Сводка по лотам, которые не стали слать в чат."""
+    word = "лот" if hidden == 1 else "лота" if hidden < 5 else "лотов"
     src = f" по фильтру «{filter_name}»" if filter_name else ""
     return (
         f"📦 <b>Ещё {hidden} {word}</b>{src}\n\n"
@@ -353,13 +304,17 @@ async def process_listings(
     # и прилетела бы повторно на следующем обходе.
     fresh: list[Listing] = []
 
+    # Порог задаётся в рублях, а лоты — в долларах, поэтому приводим
+    # порог к валюте лота. Курс берём живой: значение из настроек
+    # устаревает, и порог начинает значить не то, что задумано.
+    limit = None
+    if threshold:
+        rate = await usd_rub()
+        limit = threshold / (rate or USD_RUB_RATE or 1)
+
     for listing in listings:
-        # Проверяем порог цены. Порог задаётся в рублях, а лоты Copart —
-        # в долларах, поэтому приводим порог к валюте лота.
-        if threshold and listing.price:
-            limit = threshold / USD_RUB_RATE if listing.source == "copart" else threshold
-            if listing.price > limit:
-                continue
+        if limit and listing.price and listing.price > limit:
+            continue
 
         is_new = await mark_seen(listing, chat_id)
 
@@ -390,7 +345,7 @@ async def process_listings(
     for listing in rest:
         # Считаем после mark_seen — текущая запись исключается по external_id
         relists = 0
-        if listing.source == "copart" and listing.vin:
+        if listing.vin:
             try:
                 relists = await count_relists(listing.vin, listing.external_id)
             except Exception as e:
@@ -533,25 +488,16 @@ async def process_price_drops(
         if old_price and old_price > listing.price:
             drop = old_price - listing.price
             pct  = round(drop / old_price * 100)
-            if listing.source == "copart":
-                was  = _fmt_amount(old_price, listing.currency)
-                now  = _fmt_amount(listing.price, listing.currency)
-                diff = _fmt_amount(drop, listing.currency)
-                text = (
-                    f"📉 <b>Оценка снижена!</b>\n"
-                    f"{listing.title}\n\n"
-                    f"Было: <s>{was}</s>\n"
-                    f"Стало: <b>{now}</b> (-{diff} / -{pct}%)\n\n"
-                    f'<a href="{listing.url}">Открыть лот →</a>'
-                )
-            else:
-                text = (
-                    f"📉 <b>Цена снижена!</b>\n"
-                    f"{listing.title}\n\n"
-                    f"Было: <s>{old_price:,} ₽</s>\n"
-                    f"Стало: <b>{listing.price:,} ₽</b> (-{drop:,} ₽ / -{pct}%)\n\n"
-                    f'<a href="{listing.url}">Открыть →</a>'
-                ).replace(",", "\u2009")
+            was  = _fmt_amount(old_price, listing.currency)
+            now  = _fmt_amount(listing.price, listing.currency)
+            diff = _fmt_amount(drop, listing.currency)
+            text = (
+                f"📉 <b>Оценка снижена!</b>\n"
+                f"{listing.title}\n\n"
+                f"Было: <s>{was}</s>\n"
+                f"Стало: <b>{now}</b> (-{diff} / -{pct}%)\n\n"
+                f'<a href="{listing.url}">Открыть лот →</a>'
+            )
             try:
                 await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
             except Exception as e:

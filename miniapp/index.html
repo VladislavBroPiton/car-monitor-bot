@@ -69,9 +69,7 @@ canvas#chart{width:100%;height:120px;display:block}
 .act-item{display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--border2)}
 .act-item:last-child{border-bottom:none}
 .act-icon{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:15px}
-.act-icon.autoru{background:rgba(59,130,246,0.15)}
-.act-icon.avito{background:rgba(34,197,94,0.15)}
-.act-icon.drom{background:rgba(245,158,11,0.15)}
+.act-icon.copart{background:var(--copart-dim)}
 .act-body{flex:1;min-width:0}
 .act-title{font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .act-sub{font-size:11px;color:var(--text2);margin-top:1px}
@@ -110,10 +108,7 @@ canvas#chart{width:100%;height:120px;display:block}
 .btn-danger{background:rgba(239,68,68,0.1);color:var(--red)}
 .add-btn{display:flex;align-items:center;justify-content:center;gap:8px;width:calc(100% - 32px);margin:12px 16px 0;padding:14px;border-radius:var(--r);background:var(--accent-dim);border:1px dashed rgba(59,130,246,0.4);color:var(--accent);font-size:14px;font-weight:600;cursor:pointer}
 
-/* ── Listings tab ── */
-.src-tabs{display:flex;gap:6px;padding:12px 16px 0;overflow-x:auto;-webkit-overflow-scrolling:touch}
-.src-tab{padding:6px 14px;border-radius:20px;font-size:13px;font-weight:500;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text2);white-space:nowrap;transition:all .15s;flex-shrink:0}
-.src-tab.active{background:var(--accent-dim);border-color:var(--accent);color:var(--accent)}
+/* ── Карточка лота ── */
 .listing-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);margin:10px 16px 0;padding:14px}
 .listing-src{font-size:11px;font-weight:600;color:var(--accent2);margin-bottom:5px;display:flex;align-items:center;gap:4px}
 .listing-title{font-size:14px;font-weight:600;margin-bottom:5px}
@@ -323,10 +318,6 @@ body.light{--bg:#F5F5F7;--bg2:#FFFFFF;--bg3:#F0F0F3;--bg4:#E8E8ED;--border:rgba(
 .price-drop{display:inline-flex;align-items:center;gap:3px;background:rgba(34,197,94,0.1);color:var(--green);font-size:11px;font-weight:600;padding:2px 7px;border-radius:8px;margin-left:6px}
 
 /* ── Avg price ── */
-.avg-price-row{display:flex;gap:8px;padding:10px 16px 0}
-.avg-box{flex:1;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r-sm);padding:10px 12px;text-align:center}
-.avg-label{font-size:10px;color:var(--text2);margin-bottom:4px}
-.avg-val{font-size:14px;font-weight:700}
 
 @media(prefers-color-scheme:light){
   body:not(.light-force){
@@ -366,27 +357,10 @@ body.light-force{--bg:#F5F5F7;--bg2:#FFFFFF;--bg3:#F0F0F3;--bg4:#E8E8ED;--border
     </div>
   </div>
 
-  <div class="chips-row">
-    <div class="chip"><div class="chip-dot" style="background:#3B82F6"></div>Auto.ru</div>
-    <div class="chip"><div class="chip-dot" style="background:#22C55E"></div>Авито</div>
-    <div class="chip"><div class="chip-dot" style="background:#4B5563"></div>Дром (скоро)</div>
-  </div>
-
   <div style="padding:14px 16px 0">
     <div style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.7px;margin-bottom:10px">🔥 Топ дешёвых за сутки</div>
   </div>
   <div class="deal-scroll" id="deal-list"><div class="spinner"></div></div>
-
-  <div class="avg-price-row" id="avg-prices" style="display:none">
-    <div class="avg-box">
-      <div class="avg-label">🔵 Auto.ru</div>
-      <div class="avg-val" id="avg-autoru">—</div>
-    </div>
-    <div class="avg-box">
-      <div class="avg-label">🟢 Авито</div>
-      <div class="avg-val" id="avg-avito">—</div>
-    </div>
-  </div>
 
   <!-- Сводка по аукциону — основной источник должен быть виден и здесь -->
   <div class="card" style="border-color:var(--copart-border)">
@@ -405,38 +379,6 @@ body.light-force{--bg:#F5F5F7;--bg2:#FFFFFF;--bg3:#F0F0F3;--bg4:#E8E8ED;--border
   </div>
 
   <button class="run-btn" id="run-btn" onclick="runParser()">▶&nbsp; Запустить парсер</button>
-</div>
-
-<!-- LISTINGS -->
-<div class="page" id="page-listings">
-  <div class="hdr"><h1>📋 Прочие площадки</h1><div class="hdr-sub" id="lst-sub">Загрузка...</div></div>
-  <div style="padding:12px 16px 0">
-    <input type="search" id="lst-search" placeholder="🔍 Поиск по объявлениям..."
-      oninput="searchListings(this.value)"
-      style="width:100%;padding:10px 14px;border-radius:10px;border:1px solid var(--border);background:var(--bg2);color:var(--text);font-size:14px;outline:none">
-  </div>
-  <div class="src-tabs">
-    <button class="src-tab active" onclick="setSource('',this)">Все</button>
-    <button class="src-tab" onclick="setSource('copart',this)">🟡 Copart</button>
-    <button class="src-tab" id="ru-toggle" onclick="toggleRuTabs(this)">🇷🇺 Другие ▾</button>
-  </div>
-  <!-- Российские площадки временно свёрнуты — раскрываются кнопкой выше -->
-  <div class="src-tabs" id="ru-tabs" style="display:none">
-    <button class="src-tab" onclick="setSource('autoru',this)">🔵 Auto.ru</button>
-    <button class="src-tab" onclick="setSource('avito',this)">🟢 Авито</button>
-    <button class="src-tab" onclick="setSource('drom',this)">🟠 Дром</button>
-  </div>
-  <div style="display:flex;gap:8px;padding:8px 16px 0;flex-wrap:wrap">
-    <select id="lst-sort" onchange="sortListings()" style="flex:1;padding:7px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg2);color:var(--text);font-size:13px;outline:none">
-      <option value="date">По дате</option>
-      <option value="price_asc">Цена ↑</option>
-      <option value="price_desc">Цена ↓</option>
-      <option value="year_desc">Год ↓</option>
-      <option value="mileage_asc">Пробег ↑</option>
-    </select>
-  </div>
-  <div id="lst-list"></div>
-  <button class="load-more" id="lst-more" onclick="loadMoreListings()" style="display:none">Загрузить ещё</button>
 </div>
 
 <!-- COPART -->
@@ -498,38 +440,6 @@ body.light-force{--bg:#F5F5F7;--bg2:#FFFFFF;--bg3:#F0F0F3;--bg4:#E8E8ED;--border
              <div class="setting-sub">Публичный JSON API · без прокси</div></div>
       </div>
       <span class="status-badge status-ok">Активен</span>
-    </div>
-    <!-- Российские площадки свёрнуты: сейчас работает в основном Copart -->
-    <div class="setting-row" onclick="toggleRuSources()" style="cursor:pointer">
-      <div class="setting-left">
-        <div class="setting-icon" style="background:rgba(107,114,128,0.15)">🇷🇺</div>
-        <div><div class="setting-label">Другие площадки</div>
-             <div class="setting-sub">Auto.ru · Авито · Дром</div></div>
-      </div>
-      <span class="status-badge status-warn" id="ru-src-chevron">▾</span>
-    </div>
-    <div id="ru-sources" style="display:none">
-      <div class="setting-row">
-        <div class="setting-left">
-          <div class="setting-icon" style="background:rgba(59,130,246,0.15)">🔵</div>
-          <div><div class="setting-label">Auto.ru</div><div class="setting-sub">Прямой API · Cookies</div></div>
-        </div>
-        <span class="status-badge status-ok">Активен</span>
-      </div>
-      <div class="setting-row">
-        <div class="setting-left">
-          <div class="setting-icon" style="background:rgba(34,197,94,0.15)">🟢</div>
-          <div><div class="setting-label">Авито</div><div class="setting-sub">ScraperAPI · 1000 req/мес</div></div>
-        </div>
-        <span class="status-badge status-ok">Активен</span>
-      </div>
-      <div class="setting-row">
-        <div class="setting-left">
-          <div class="setting-icon" style="background:rgba(107,114,128,0.15)">🟠</div>
-          <div><div class="setting-label">Дром</div><div class="setting-sub">Требует RU прокси</div></div>
-        </div>
-        <span class="status-badge status-warn">Отложен</span>
-      </div>
     </div>
   </div>
 
@@ -641,10 +551,6 @@ body.light-force{--bg:#F5F5F7;--bg2:#FFFFFF;--bg3:#F0F0F3;--bg4:#E8E8ED;--border
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
     Дашборд
   </button>
-  <button class="nav-btn" id="nav-listings" onclick="go('listings')">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 12h6M9 8h6M9 16h4"/><path d="M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/></svg>
-    Прочее
-  </button>
   <button class="nav-btn" id="nav-favorites" onclick="go('favorites')" style="position:relative">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
     Избранное
@@ -698,9 +604,6 @@ document.body.classList.add('dark-force');
 // ── State ────────────────────────────────────────────────────────────────────
 let statsData = null;
 let chartMode = 'hourly';
-let lstSource = '';
-let lstPage = 1;
-let lstHasMore = false;
 let favSort = 'date';
 let favorites = [];
 let theme = localStorage.getItem('cm_theme') || 'dark';
@@ -733,7 +636,6 @@ function go(name) {
   document.getElementById(`page-${name}`).classList.add('active');
   document.getElementById(`nav-${name}`).classList.add('active');
   if(name==='dashboard') { loadDashboard(); loadCopartOverview(); }
-  if(name==='listings')  { lstPage=1; loadListings(true); }
   if(name==='copart')    { cpPage=1; loadCopart(true); }
   if(name==='favorites') loadFavorites();
 }
@@ -746,16 +648,14 @@ function toast(msg) {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-// Copart торгует в долларах, российские площадки — в рублях.
-// Подписывать всё рублями нельзя: разница почти в сто раз.
+// Аукцион торгует в долларах, у канадских лотов — канадские.
+// Подписывать их рублями нельзя: разница почти в сто раз.
 const CUR_SIGN = {USD:'$', CAD:'CA$'};
 function fmtP(v, l) {
   if(!v) return '—';
-  const isAuction = l && (l.source === 'copart' || l.currency);
-  if(isAuction) return (CUR_SIGN[l.currency] || '$') + v.toLocaleString('ru-RU');
-  return v.toLocaleString('ru-RU') + ' ₽';
+  return (CUR_SIGN[l && l.currency] || '$') + v.toLocaleString('ru-RU');
 }
-const fmtM = v => v ? v.toLocaleString('ru-RU')+' км' : '';
+const fmtM = v => v ? v.toLocaleString('ru-RU')+' миль' : '';
 function timeAgo(s) {
   const d=(Date.now()-new Date(s))/1000;
   if(d<60) return 'только что';
@@ -763,8 +663,8 @@ function timeAgo(s) {
   if(d<86400) return Math.floor(d/3600)+' ч';
   return Math.floor(d/86400)+' д';
 }
-function srcIcon(s){ return {autoru:'🔵',avito:'🟢',drom:'🟠',copart:'🟡'}[s]||'⚪'; }
-function srcName(s){ return {autoru:'Auto.ru',avito:'Авито',drom:'Дром',copart:'Copart'}[s]||s; }
+const srcIcon = () => '🟡';
+const srcName = () => 'Copart';
 function tr(s){ return {AUTO:'Автомат',MECHANICAL:'Механика',ROBOT:'Робот',VARIATOR:'Вариатор'}[s]||s; }
 function animN(id, target) {
   const el=document.getElementById(id); if(!el) return;
@@ -799,7 +699,6 @@ async function loadDashboard() {
     renderChart();
     // Топ дешёвых — отдельный список из БД (все за 24ч), не просто последние 20
     renderDeals(statsData.top_deals || statsData.recent_listings||[]);
-    renderAvgPrices(statsData.recent_listings||[]);
     updateNewBadge(statsData.seen_total||0);
   } catch(e) {
     document.getElementById('dash-sub').textContent = 'Нет связи';
@@ -903,73 +802,6 @@ async function runParser() {
     setTimeout(loadDashboard, 1000);
   } catch { toast('❌ Ошибка запуска'); }
   finally { btn.disabled=false; btn.innerHTML='▶&nbsp; Запустить парсер'; }
-}
-
-// ── Listings ──────────────────────────────────────────────────────────────────
-function setSource(src, btn) {
-  lstSource=src; lstPage=1;
-  document.querySelectorAll('.src-tab').forEach(b=>b.classList.remove('active'));
-  btn.classList.add('active');
-  loadListings(true);
-}
-
-async function loadListings(reset=false) {
-  const list = document.getElementById('lst-list');
-  if(reset){ list.innerHTML='<div class="spinner"></div>'; lstPage=1; }
-  try {
-    const url = `${BASE}/api/listings?page=${lstPage}&limit=15${lstSource?'&source='+lstSource:''}`;
-    const r = await fetch(url);
-    const d = await r.json();
-    if(reset) list.innerHTML='';
-    document.getElementById('lst-sub').textContent = `${d.total} объявлений`;
-    if(!d.items.length && reset){
-      list.innerHTML='<div class="empty"><div class="empty-icon">🔍</div><div class="empty-title">Нет объявлений</div></div>';
-      document.getElementById('lst-more').style.display='none';
-      return;
-    }
-    list.innerHTML += d.items.map(l => listingCard(l, isFav(l))).join('');
-    lstHasMore = lstPage < d.pages;
-    document.getElementById('lst-more').style.display = lstHasMore ? 'flex' : 'none';
-  } catch { list.innerHTML='<div class="empty"><div class="empty-icon">⚠️</div><div class="empty-title">Ошибка загрузки</div></div>'; }
-}
-
-function loadMoreListings() { lstPage++; loadListings(false); }
-
-function listingCard(l, faved=false) {
-  const trMap = {AUTO:'Автомат',MECHANICAL:'Механика',ROBOT:'Робот',VARIATOR:'Вариатор'};
-  // Парсим КПП из заголовка если не задано отдельно
-  let trStr = l.transmission ? trMap[l.transmission]||'' : '';
-  if(!trStr && l.title) {
-    if(/\bAT\b|AMT/.test(l.title)) trStr = 'Автомат';
-    else if(/\bMT\b/.test(l.title)) trStr = 'Механика';
-    else if(/CVT/.test(l.title)) trStr = 'Вариатор';
-  }
-  const specs = [l.year?l.year+' г.':'', fmtM(l.mileage), trStr].filter(Boolean).join(' · ');
-  const eid = (l.external_id||'').replace(/'/g,"\'");
-  const url = (l.url||'').replace(/'/g,"\'");
-  const ttl = (l.title||'').replace(/'/g,"\'");
-  const cty = (l.city||'').replace(/'/g,"\'");
-  const photo = getPhotoUrl(l);
-  const photoHtml = photo
-    ? `<img class="listing-img" src="${photo}" onerror="this.style.display='none'" loading="lazy">`
-    : '';
-  return `
-    <div class="listing-card" id="lc-${l.source}-${l.external_id}">
-      ${photoHtml}
-      <div class="listing-src">${srcIcon(l.source)} ${srcName(l.source)}</div>
-      <div class="listing-title">${l.title||'Авто'}</div>
-      <div class="listing-price">${fmtP(l.price, l)}</div>
-      ${specs?`<div class="listing-specs">${specs}</div>`:''}
-      ${l.city?`<div class="listing-city">📍 ${l.city}</div>`:''}
-      <div class="listing-footer">
-        <a class="btn-open" href="${l.url}" target="_blank">🔗 Открыть</a>
-        <button class="btn-fav ${faved?'active':''}"
-          onclick="toggleFav(this,'${l.source}','${eid}','${url}','${ttl}',${l.price||0},${l.year||0},${l.mileage||0},'${cty}')">
-          ${faved?'⭐️':'☆'}
-        </button>
-        <button class="btn-fav" onclick="shareListing('${url}','${ttl}')" title="Поделиться">↗</button>
-      </div>
-    </div>`;
 }
 
 // ── Favorites ─────────────────────────────────────────────────────────────────
@@ -1086,61 +918,6 @@ document.getElementById('page-dashboard').addEventListener('touchend', async ()=
   ptStart=0;
 },{passive:true});
 
-// ── Search & Sort ────────────────────────────────────────────────────────────
-let allListings = [];
-let searchQuery = '';
-let lstSortMode = 'date';
-
-function searchListings(q) {
-  searchQuery = q.toLowerCase();
-  renderListingsFiltered();
-}
-
-function sortListings() {
-  lstSortMode = document.getElementById('lst-sort').value;
-  renderListingsFiltered();
-}
-
-function renderListingsFiltered() {
-  let items = [...allListings];
-  if(searchQuery) {
-    items = items.filter(l =>
-      (l.title||'').toLowerCase().includes(searchQuery) ||
-      (l.city||'').toLowerCase().includes(searchQuery)
-    );
-  }
-  if(lstSortMode === 'price_asc')  items.sort((a,b)=>(a.price||0)-(b.price||0));
-  if(lstSortMode === 'price_desc') items.sort((a,b)=>(b.price||0)-(a.price||0));
-  if(lstSortMode === 'year_desc')  items.sort((a,b)=>(b.year||0)-(a.year||0));
-  if(lstSortMode === 'mileage_asc') items.sort((a,b)=>(a.mileage||0)-(b.mileage||0));
-  const list = document.getElementById('lst-list');
-  if(!items.length) {
-    list.innerHTML = '<div class="empty"><div class="empty-icon">🔍</div><div class="empty-title">Ничего не найдено</div></div>';
-    return;
-  }
-  list.innerHTML = items.map(l => listingCard(l, isFav(l))).join('');
-}
-
-// Переопределяем loadListings чтобы кешировать все объявления
-const _origLoad = loadListings;
-async function loadListings(reset=false) {
-  const list = document.getElementById('lst-list');
-  if(reset){ list.innerHTML=skelCards(3); lstPage=1; allListings=[]; }
-  try {
-    const url = `${BASE}/api/listings?page=${lstPage}&limit=50${lstSource?'&source='+lstSource:''}`;
-    const r = await fetch(url);
-    const d = await r.json();
-    document.getElementById('lst-sub').textContent = `${d.total} объявлений`;
-    if(reset) allListings = d.items;
-    else allListings = [...allListings, ...d.items];
-    lstHasMore = lstPage < d.pages;
-    document.getElementById('lst-more').style.display = lstHasMore ? 'flex' : 'none';
-    renderListingsFiltered();
-  } catch {
-    list.innerHTML='<div class="empty"><div class="empty-icon">⚠️</div><div class="empty-title">Ошибка загрузки</div></div>';
-  }
-}
-
 // ── Share listing ─────────────────────────────────────────────────────────────
 function shareListing(url, title) {
   if(tg && tg.shareURL) {
@@ -1151,60 +928,6 @@ function shareListing(url, title) {
     navigator.clipboard?.writeText(url);
     toast('🔗 Ссылка скопирована');
   }
-}
-
-// ── Swipe to fav ──────────────────────────────────────────────────────────────
-function addSwipe(el) {
-  let startX = 0, startY = 0;
-  el.addEventListener('touchstart', e => {
-    startX = e.touches[0].clientX;
-    startY = e.touches[0].clientY;
-  }, {passive:true});
-  el.addEventListener('touchend', e => {
-    const dx = e.changedTouches[0].clientX - startX;
-    const dy = Math.abs(e.changedTouches[0].clientY - startY);
-    if(dy > 30) return; // вертикальный скролл
-    if(dx < -60) { // свайп влево — скрыть
-      el.style.transition = 'transform .25s,opacity .25s';
-      el.style.transform = 'translateX(-100%)';
-      el.style.opacity = '0';
-      setTimeout(() => el.remove(), 250);
-    }
-  }, {passive:true});
-}
-
-// Переопределяем listingCard чтобы добавить кнопку поделиться
-const _origCard = listingCard;
-function listingCard(l, faved=false) {
-  const trMap = {AUTO:'Автомат',MECHANICAL:'Механика',ROBOT:'Робот',VARIATOR:'Вариатор'};
-  // Парсим КПП из заголовка если не задано отдельно
-  let trStr = l.transmission ? trMap[l.transmission]||'' : '';
-  if(!trStr && l.title) {
-    if(/\bAT\b|AMT/.test(l.title)) trStr = 'Автомат';
-    else if(/\bMT\b/.test(l.title)) trStr = 'Механика';
-    else if(/CVT/.test(l.title)) trStr = 'Вариатор';
-  }
-  const specs = [l.year?l.year+' г.':'', fmtM(l.mileage), trStr].filter(Boolean).join(' · ');
-  const eid = (l.external_id||'').replace(/'/g,"\'");
-  const url = (l.url||'').replace(/'/g,"\'");
-  const ttl = (l.title||'').replace(/'/g,"\'");
-  const cty = (l.city||'').replace(/'/g,"\'");
-  return `
-    <div class="listing-card" id="lc-${l.source}-${l.external_id}">
-      <div class="listing-src">${srcIcon(l.source)} ${srcName(l.source)}</div>
-      <div class="listing-title">${l.title||'Авто'}</div>
-      <div class="listing-price">${fmtP(l.price, l)}</div>
-      ${specs?`<div class="listing-specs">${specs}</div>`:''}
-      ${l.city?`<div class="listing-city">📍 ${l.city}</div>`:''}
-      <div class="listing-footer">
-        <a class="btn-open" href="${l.url}" target="_blank">🔗 Открыть</a>
-        <button class="btn-fav ${faved?'active':''}"
-          onclick="toggleFav(this,'${l.source}','${eid}','${url}','${ttl}',${l.price||0},${l.year||0},${l.mileage||0},'${cty}')">
-          ${faved?'⭐️':'☆'}
-        </button>
-        <button class="btn-fav" onclick="shareListing('${url}','${ttl}')" title="Поделиться">↗</button>
-      </div>
-    </div>`;
 }
 
 // ── Copart ────────────────────────────────────────────────────────────────────
@@ -1506,21 +1229,6 @@ function toggleCpView(btn) {
 
 // Российские площадки временно свёрнуты за одну кнопку —
 // основной источник теперь Copart
-function toggleRuSources() {
-  const box = document.getElementById('ru-sources');
-  const open = box.style.display === 'none';
-  box.style.display = open ? 'block' : 'none';
-  document.getElementById('ru-src-chevron').textContent = open ? '▴' : '▾';
-}
-
-function toggleRuTabs(btn) {
-  const box = document.getElementById('ru-tabs');
-  const open = box.style.display === 'none';
-  box.style.display = open ? 'flex' : 'none';
-  btn.textContent = open ? '🇷🇺 Другие ▴' : '🇷🇺 Другие ▾';
-  btn.classList.toggle('active', open);
-}
-
 let cpSearchTimer = null;
 function searchCopart(q) {
   cpSearch = q.trim();
@@ -1699,42 +1407,6 @@ function renderDeals(listings) {
       ${l.city?`<div class="deal-city">📍 ${l.city}</div>`:''}
     </div>
   `).join('');
-}
-
-// ── Average prices ────────────────────────────────────────────────────────────
-function renderAvgPrices(listings) {
-  const bySource = {};
-  listings.forEach(l => {
-    if(!l.price || !l.source) return;
-    if(!bySource[l.source]) bySource[l.source] = [];
-    bySource[l.source].push(l.price);
-  });
-  const avg = src => {
-    const prices = bySource[src];
-    if(!prices?.length) return null;
-    return Math.round(prices.reduce((a,b)=>a+b,0)/prices.length);
-  };
-  const ar = avg('autoru'), av = avg('avito');
-  if(ar || av) {
-    document.getElementById('avg-prices').style.display = 'flex';
-    document.getElementById('avg-autoru').textContent = ar ? fmtP(ar) : '—';
-    document.getElementById('avg-avito').textContent  = av ? fmtP(av) : '—';
-    // Подсветим более дешёвый
-    if(ar && av) {
-      const cheaper = ar < av ? 'avg-autoru' : 'avg-avito';
-      document.getElementById(cheaper).style.color = 'var(--green)';
-    }
-  }
-}
-
-// ── Photo in listing card ─────────────────────────────────────────────────────
-function getPhotoUrl(l) {
-  // Auto.ru — фото из их CDN по ID объявления
-  if(l.source === 'autoru' && l.external_id) {
-    const id = l.external_id.split('-')[0];
-    return `https://avatars.mds.yandex.net/get-autoru-vos/2048992/${id}/832x624`;
-  }
-  return null;
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────

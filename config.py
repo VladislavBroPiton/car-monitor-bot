@@ -7,20 +7,19 @@ BOT_TOKEN: str = os.environ["BOT_TOKEN"]
 OWNER_ID: int = int(os.environ["OWNER_ID"])
 DATABASE_URL: str = os.environ["DATABASE_URL"]
 
-AUTORU_SESSION_ID: str = os.getenv("AUTORU_SESSION_ID", "")
-AUTORU_CSRF_TOKEN: str = os.getenv("AUTORU_CSRF_TOKEN", "")
-
-# ScraperAPI — для Авито и Дрома (обход блокировки US IP)
+# ScraperAPI — запасной путь к Copart, если с IP дата-центра
+# вместо JSON приходит страница защиты. Необязателен.
 SCRAPER_API_KEY: str = os.getenv("SCRAPER_API_KEY", "")
 
-# Курс доллара для Copart: лоты в USD, а границы цены в фильтрах — в рублях
+# Запасной курс доллара: берётся, только когда ЦБ недоступен (см. rates.py).
+# Лоты и фильтры в долларах, курс нужен для пересчёта итоговой суммы в рубли.
 USD_RUB_RATE: float = float(os.getenv("USD_RUB_RATE", "90"))
 
 # Через сколько дней после торгов лот считается отторгованным и убирается
 # из списка — если пользователь включил автоочистку в настройках.
 SOLD_CLEAN_DAYS: int = int(os.getenv("SOLD_CLEAN_DAYS", "3"))
 
-# Сколько объявлений максимум слать в чат за один обход одного фильтра.
+# Сколько лотов максимум слать в чат за один обход одного фильтра.
 # Первый прогон нового фильтра иначе высыпает сотни карточек подряд.
 MAX_NOTIFY_PER_RUN: int = int(os.getenv("MAX_NOTIFY_PER_RUN", "15"))
 
